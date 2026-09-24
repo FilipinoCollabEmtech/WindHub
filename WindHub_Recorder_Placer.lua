@@ -186,6 +186,7 @@ local function saveSettings(data)
 end
 local SelectedFile; local AutoPlacing; local CfgAutoUpgrade; local CfgNotify; local CfgIgnoreTime; local CfgAutoRetry; local PlacerDropdown; local AutoPlaceToggle
 local CfgAutoSpeed; local CfgSpeedValue
+local getReplayButton; local clickReplayButton
 local _settings = loadSettings()
 SelectedFile = _settings.SelectedFile
 AutoPlacing = _settings.AutoPlace == true
@@ -614,22 +615,23 @@ end)
 -- server->client level-end signals (all allowed, no client->server hook)
 local function doRetry()
     if not CfgAutoRetry then return end
+    local btn = getReplayButton()
+    if not btn then return end
     retryCount = retryCount + 1
-    pcall(function() RetryInfo:SetDesc("Retries: " .. retryCount .. " — retrying level then replaying " .. (SelectedFile or "?") .. ".json") end)
-    notify("Main", "Level finished — retrying (#" .. retryCount .. ")", 4)
-    task.delay(2.5, function()
-        if not CfgAutoRetry then return end
-        -- retry by simulating click on GameGui.EndScreen.Replay (remote FireServer doesn't work per your test)
-        local retried = false
-        pcall(function() if clickReplayButton() then retried = true end end)
-        -- don't auto-enable placer here — Auto Place runs on its own saved state when loaded
-        -- (placed before, this was turning Auto Place on via AutoPlaceToggle:Set(true))
-    end)
+    pcall(function() RetryInfo:SetDesc("Retries: " .. retryCount) end)
+    -- exact manual that worked for you
+    local ok = pcall(function() firesignal(btn.Activated) end)
+    if ok then
+        print("1 firesignal Activated done")
+        notify("Main", "Auto Retry: clicked Replay (#" .. retryCount .. ")", 4)
+    else
+        print("1 not found/visible")
+    end
 end
 -- also try to click the on-screen Replay button directly if the RemoteEvent alone doesn't retry
 -- You specified: game:GetService("Players").LocalPlayer.PlayerGui.GameGui.EndScreen.Replay
 -- Manual that worked: btn and btn.Visible and btn.Parent.Visible then firesignal(btn.Activated)
-local function getReplayButton()
+getReplayButton = function()
     local ok, btn = pcall(function()
         return game:GetService("Players").LocalPlayer.PlayerGui.GameGui.EndScreen.Replay
     end)
@@ -638,7 +640,7 @@ local function getReplayButton()
     end
     return nil
 end
-local function clickReplayButton()
+clickReplayButton = function()
     local btn = getReplayButton()
     if not btn then return false end
     local ok = pcall(function() firesignal(btn.Activated) end)
