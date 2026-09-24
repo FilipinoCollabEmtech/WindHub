@@ -3,8 +3,8 @@
 -- Execute on teleport (like Infinite Yield) — re-queue after level retry/teleport
 -- 1) Push this file to GitHub (e.g. https://github.com/YOURNAME/WindHub -> raw link below)
 -- 2) Replace GH_URL below with your raw link, e.g.
---    https://raw.githubusercontent.com/YOURNAME/WindHub/main/WindHub_Recorder_Placer.lua
-local GH_URL = "https://raw.githubusercontent.com/YOURNAME/WindHub/main/WindHub_Recorder_Placer.lua"
+--    https://raw.githubusercontent.com/FilipinoCollabEmtech/WindHub/main/WindHub_Recorder_Placer.lua
+local GH_URL = "https://raw.githubusercontent.com/FilipinoCollabEmtech/WindHub/main/WindHub_Recorder_Placer.lua"
 pcall(function()
     local q = queue_on_teleport or (syn and syn.queue_on_teleport) or queueonteleport
     if q then q('loadstring(game:HttpGet("' .. GH_URL .. '"))()') end
