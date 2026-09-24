@@ -185,6 +185,7 @@ local function saveSettings(data)
     pcall(function() writefile(SETTINGS_FILE, HttpService:JSONEncode(data)) end)
 end
 local SelectedFile; local AutoPlacing; local CfgAutoUpgrade; local CfgNotify; local CfgIgnoreTime; local CfgAutoRetry; local PlacerDropdown; local AutoPlaceToggle
+local CfgAutoSpeed; local CfgSpeedValue
 local _settings = loadSettings()
 SelectedFile = _settings.SelectedFile
 AutoPlacing = _settings.AutoPlace == true
@@ -192,6 +193,8 @@ CfgAutoUpgrade = _settings.AutoUpgrade == true
 CfgNotify = _settings.NotifyPlacer == true
 CfgIgnoreTime = _settings.IgnoreTime == true
 CfgAutoRetry = _settings.AutoRetry == true
+CfgAutoSpeed = _settings.AutoSpeed == true
+CfgSpeedValue = tonumber(_settings.SpeedValue) or 5
 AntiMacroBypass = _settings.BypassAntiMacro == true
 setAntiMacroBypass(AntiMacroBypass)
 local function persistPlacer()
@@ -203,7 +206,42 @@ local function persistPlacer()
         AutoPlace = AutoPlacing,
         AutoRetry = CfgAutoRetry,
         BypassAntiMacro = AntiMacroBypass,
+        AutoSpeed = CfgAutoSpeed,
+        SpeedValue = CfgSpeedValue,
     })
+end
+-- Auto speed helper — tries ChangeSpeed / SpeedUp / SpeedUp2 remotes
+local function setGameSpeed(v)
+    v = math.clamp(math.floor(tonumber(v) or 5), 1, 5)
+    local ok
+    -- 1) Functions.ChangeSpeed (most direct)
+    pcall(function()
+        local f = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("ChangeSpeed")
+        if f then f:InvokeServer(v) ok = true end
+    end)
+    if ok then return true end
+    -- 2) Functions.SpeedUp / SpeedUp2 (some forks use these)
+    pcall(function()
+        local su = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("SpeedUp")
+        if su then su:InvokeServer(v) ok = true end
+    end)
+    if ok then return true end
+    pcall(function()
+        local su2 = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("SpeedUp2")
+        if su2 then su2:InvokeServer(v) ok = true end
+    end)
+    return ok and true or false
+end
+local function getGameSpeed()
+    local ok, v = pcall(function()
+        local f = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("ChangeSpeed")
+        -- some games store speed as attribute/value
+        local ws = Workspace:FindFirstChild("GameSpeed") or ReplicatedStorage:FindFirstChild("GameSpeed")
+        if ws and tonumber(ws.Value) then return tonumber(ws.Value) end
+        return nil
+    end)
+    if ok and tonumber(v) then return tonumber(v) end
+    return nil
 end
 
 local function serializeArg(v)
@@ -540,6 +578,39 @@ MainTab:Toggle({
         notify("Main", "AntiMacro auto-solve " .. (AntiMacroBypass and "ON" or "OFF"))
     end,
 })
+MainTab:Toggle({
+    Title = "Auto Speed",
+    Desc = "When ON, keeps game speed at the chosen value (1-5x). If not already that speed, sets it.",
+    Value = CfgAutoSpeed,
+    Callback = function(state)
+        CfgAutoSpeed = (state == true)
+        persistPlacer()
+        if CfgAutoSpeed then setGameSpeed(CfgSpeedValue) notify("Main", "Auto Speed ON → " .. CfgSpeedValue .. "x") else notify("Main", "Auto Speed OFF") end
+    end,
+})
+MainTab:Dropdown({
+    Title = "Game Speed",
+    Desc = "Choose 1-5x. Auto Speed will keep it here.",
+    Values = {"1x", "2x", "3x", "4x", "5x"},
+    Value = tostring(CfgSpeedValue) .. "x",
+    Callback = function(opt)
+        if type(opt) == "table" then opt = opt[1] end
+        local n = tonumber(tostring(opt):match("(%d)"))
+        if n and n >=1 and n <=5 then CfgSpeedValue = n persistPlacer() if CfgAutoSpeed then setGameSpeed(CfgSpeedValue) end end
+    end,
+})
+-- keep speed at chosen value
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if CfgAutoSpeed then
+            local cur = getGameSpeed()
+            if cur == nil or cur ~= CfgSpeedValue then
+                pcall(function() setGameSpeed(CfgSpeedValue) end)
+            end
+        end
+    end
+end)
 -- server->client level-end signals (all allowed, no client->server hook)
 local function doRetry()
     if not CfgAutoRetry then return end
