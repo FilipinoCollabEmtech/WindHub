@@ -694,7 +694,10 @@ RecorderTab:Button({
     Desc = "Discards actions captured in this session (no file written).",
     Callback = function() Recorded = {} ;SeenLocations = {} refreshRecorderParagraph() notify("Recorder", "Session cleared.") end,
 })
-if SelectedFile and not table.find(listRecordFiles(), SelectedFile) then SelectedFile = nil persistPlacer() end
+do
+    local _chk = listRecordFiles()
+    if SelectedFile and #_chk > 0 and not table.find(_chk, SelectedFile) then SelectedFile = nil persistPlacer() end
+end
 local function currentFiles()
     local files = listRecordFiles()
     if #files == 0 then return { "No files found" } end
