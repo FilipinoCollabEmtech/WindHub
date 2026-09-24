@@ -633,7 +633,7 @@ MainTab:Toggle({
     Value = CfgAutoMut,
     Callback = function(state) CfgAutoMut = (state == true) persistPlacer() notify("Main", "Auto Mutations " .. (CfgAutoMut and "ON" or "OFF")) end,
 })
-local MUT_CHOICES = {"Gigantism","Regeneration","BossRush","None","Random"}
+local MUT_CHOICES = {"Gigantism","Regeneration","BossRush","Blackout","Invasion","None","Speedy","Rapid","Tank","Heavy","Giant","Regenerating","Elite","Mini Boss","Berserker","Random"}
 MainTab:Dropdown({
     Title = "Mutation Choice 1",
     Desc = "First pick — if offered, votes it.",
@@ -648,6 +648,25 @@ MainTab:Dropdown({
     Value = CfgMut2,
     Callback = function(opt) if type(opt)=="table" then opt=opt[1] end CfgMut2=tostring(opt) persistPlacer() end,
 })
+-- keep dropdowns in sync when server sends new Vote payload with unseen Ids
+pcall(function()
+    local sm = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("SlopMutator")
+    if sm and sm.OnClientEvent then
+        -- wrap the existing handler to also refresh dropdown values if a new Id appears
+        local origChoices = {}
+        for _,v in ipairs(MUT_CHOICES) do origChoices[v:lower()] = true end
+        sm.OnClientEvent:Connect(function(kind, payload)
+            if kind ~= "Vote" or type(payload) ~= "table" then return end
+            for _, entry in ipairs(payload) do
+                local id = tostring(entry.Id or "")
+                if id ~= "" and not origChoices[id:lower()] then
+                    table.insert(MUT_CHOICES, id)
+                    origChoices[id:lower()] = true
+                end
+            end
+        end)
+    end
+end)
 -- keep speed at chosen value
 task.spawn(function()
     while true do
