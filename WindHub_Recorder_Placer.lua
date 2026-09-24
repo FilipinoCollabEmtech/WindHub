@@ -548,21 +548,9 @@ local function doRetry()
     notify("Main", "Level finished — retrying (#" .. retryCount .. ")", 4)
     task.delay(2.5, function()
         if not CfgAutoRetry then return end
-        -- retry the level (server->client allowed, client->server FireServer to replay)
+        -- retry by simulating click on GameGui.EndScreen.Replay (remote FireServer doesn't work per your test)
         local retried = false
-        pcall(function()
-            local rp = ReplicatedStorage:FindFirstChild("ReplayButtonPressed")
-            if rp then rp:FireServer() retried = true end
-        end)
-        if not retried then
-            pcall(function()
-                local ed = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("EndDecision")
-                if ed then ed:FireServer(true) retried = true end
-            end)
-        end
-        if not retried then
-            pcall(function() if clickReplayButton() then retried = true end end)
-        end
+        pcall(function() if clickReplayButton() then retried = true end end)
         -- don't auto-enable placer here — Auto Place runs on its own saved state when loaded
         -- (placed before, this was turning Auto Place on via AutoPlaceToggle:Set(true))
     end)
