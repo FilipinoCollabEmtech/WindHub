@@ -557,7 +557,7 @@ local function doRetry()
         if not retried then
             pcall(function()
                 local ed = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("EndDecision")
-                if ed then ed:FireServer("Replay") retried = true end
+                if ed then ed:FireServer(true) retried = true end
             end)
         end
         if not retried then
