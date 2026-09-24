@@ -186,6 +186,7 @@ local function saveSettings(data)
 end
 local SelectedFile; local AutoPlacing; local CfgAutoUpgrade; local CfgNotify; local CfgIgnoreTime; local CfgAutoRetry; local PlacerDropdown; local AutoPlaceToggle
 local CfgAutoSpeed; local CfgSpeedValue
+local CfgAutoSkill; local CfgAutoMut; local CfgMut1; local CfgMut2
 local getReplayButton; local clickReplayButton
 local _settings = loadSettings()
 SelectedFile = _settings.SelectedFile
@@ -196,6 +197,10 @@ CfgIgnoreTime = _settings.IgnoreTime == true
 CfgAutoRetry = _settings.AutoRetry == true
 CfgAutoSpeed = _settings.AutoSpeed == true
 CfgSpeedValue = tonumber(_settings.SpeedValue) or 5
+CfgAutoSkill = _settings.AutoSkill == true
+CfgAutoMut = _settings.AutoMut == true
+CfgMut1 = _settings.Mut1 or "Gigantism"
+CfgMut2 = _settings.Mut2 or "Regeneration"
 AntiMacroBypass = _settings.BypassAntiMacro == true
 setAntiMacroBypass(AntiMacroBypass)
 local function persistPlacer()
@@ -207,6 +212,12 @@ local function persistPlacer()
         AutoPlace = AutoPlacing,
         AutoRetry = CfgAutoRetry,
         BypassAntiMacro = AntiMacroBypass,
+        AutoSpeed = CfgAutoSpeed,
+        SpeedValue = CfgSpeedValue,
+        AutoSkill = CfgAutoSkill,
+        AutoMut = CfgAutoMut,
+        Mut1 = CfgMut1,
+        Mut2 = CfgMut2,
         AutoSpeed = CfgAutoSpeed,
         SpeedValue = CfgSpeedValue,
     })
@@ -600,6 +611,33 @@ MainTab:Dropdown({
         if n and n >=1 and n <=5 then CfgSpeedValue = n persistPlacer() if CfgAutoSpeed then setGameSpeed(CfgSpeedValue) end end
     end,
 })
+MainTab:Toggle({
+    Title = "Auto Skill",
+    Desc = "Auto uses hero skills (ActivateAbility) when off cooldown. Uses Drakobloxxer etc.",
+    Value = CfgAutoSkill,
+    Callback = function(state) CfgAutoSkill = (state == true) persistPlacer() notify("Main", "Auto Skill " .. (CfgAutoSkill and "ON" or "OFF")) end,
+})
+MainTab:Toggle({
+    Title = "Auto Choose Mutations",
+    Desc = "Auto votes SlopMutator from your two choices. If neither is offered, skips.",
+    Value = CfgAutoMut,
+    Callback = function(state) CfgAutoMut = (state == true) persistPlacer() notify("Main", "Auto Mutations " .. (CfgAutoMut and "ON" or "OFF")) end,
+})
+local MUT_CHOICES = {"Gigantism","Regeneration","BossRush","None","Random"}
+MainTab:Dropdown({
+    Title = "Mutation Choice 1",
+    Desc = "First pick — if offered, votes it.",
+    Values = MUT_CHOICES,
+    Value = CfgMut1,
+    Callback = function(opt) if type(opt)=="table" then opt=opt[1] end CfgMut1=tostring(opt) persistPlacer() end,
+})
+MainTab:Dropdown({
+    Title = "Mutation Choice 2",
+    Desc = "Second pick — if 1 not offered but 2 is, votes 2. If neither, skips.",
+    Values = MUT_CHOICES,
+    Value = CfgMut2,
+    Callback = function(opt) if type(opt)=="table" then opt=opt[1] end CfgMut2=tostring(opt) persistPlacer() end,
+})
 -- keep speed at chosen value
 task.spawn(function()
     while true do
@@ -610,6 +648,67 @@ task.spawn(function()
                 pcall(function() setGameSpeed(CfgSpeedValue) end)
             end
         end
+    end
+end)
+-- Auto Skill loop — observer-only, uses ActivateAbility per tower
+task.spawn(function()
+    local GetCD = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("GetAbilityCooldown")
+    local Activate = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("ActivateAbility")
+    local AbilityAuto = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("AbilityAuto")
+    while true do
+        task.wait(0.7)
+        if CfgAutoSkill and Activate then
+            local folder = Workspace:FindFirstChild("Towers")
+            if folder then
+                for _, m in ipairs(folder:GetChildren()) do
+                    if isOwnTower(m) then
+                        local canUse = true
+                        if GetCD then
+                            local ok, cd = pcall(function() return GetCD:InvokeServer(m) end)
+                            if ok and tonumber(cd) and tonumber(cd) > 0.2 then canUse = false end
+                        end
+                        if canUse then
+                            pcall(function() Activate:FireServer(m) end)
+                            -- also ensure AbilityAuto is on for this hero (e.g. B01 50 R3TR0 true)
+                            if AbilityAuto then
+                                pcall(function()
+                                    -- try to enable auto for this tower's ability if needed
+                                    local id = m:GetAttribute("ID") or m.Name
+                                    AbilityAuto:FireServer(tostring(id), true)
+                                end)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+-- Auto Mutations — listen to SlopMutator Votes, pick 1 or 2 if offered
+pcall(function()
+    local sm = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("SlopMutator")
+    if sm and sm.OnClientEvent then
+        sm.OnClientEvent:Connect(function(kind, payload)
+            if not CfgAutoMut then return end
+            if kind ~= "Votes" or type(payload) ~= "table" then return end
+            -- payload e.g. {Gigantism=1, Regeneration=0, BossRush=0, None=0}
+            local offered = {}
+            for k in pairs(payload) do table.insert(offered, tostring(k)) end
+            local pick = nil
+            for _, choice in ipairs({CfgMut1, CfgMut2}) do
+                for _, off in ipairs(offered) do
+                    if off:lower() == tostring(choice):lower() and off:lower() ~= "none" then pick = off break end
+                end
+                if pick then break end
+            end
+            if pick then
+                task.wait(0.4 + math.random()*0.6)
+                pcall(function() sm:FireServer("Vote", pick) end)
+                notify("Main", "Voted mutation: " .. pick)
+            else
+                -- neither choice offered — skip as you asked
+            end
+        end)
     end
 end)
 -- server->client level-end signals (all allowed, no client->server hook)
