@@ -1077,12 +1077,6 @@ AutoPlaceToggle = PlacerTab:Toggle({
                             if liveTower then
                                 local k = posKey(entry.PX, entry.PY, entry.PZ)
                                 if k then placedByPos[k] = liveTower end
-                                local sid = nil
-                                pcall(function() sid = liveTower:GetAttribute("ID") end)
-                                if CfgNotify then
-                                    -- extra identity log when placing Pog Cat etc
-                                    print(("[WindHub] placed %s @ %s -> live %s id=%s"):format(entry.Unit, entry.Loc, liveTower.Name, tostring(sid)))
-                                end
                             end
                         end
                         if CfgNotify and success then
