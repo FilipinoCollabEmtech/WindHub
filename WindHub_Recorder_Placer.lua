@@ -25,6 +25,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    pcall(function() LocalPlayer = Players:GetPropertyChangedSignal("LocalPlayer"):Wait() end)
+    LocalPlayer = LocalPlayer or Players.LocalPlayer
+    if not LocalPlayer then pcall(function() LocalPlayer = Players.PlayerAdded:Wait() end) end
+end
+assert(LocalPlayer, "[WindHub] LocalPlayer not found")
 
 local WIND_VERSION = "1.6.66"
 local WindUI = nil
@@ -115,10 +121,14 @@ end)
 -- Price + Cash helpers — server truth only, no require
 local CashValue = nil
 pcall(function()
-    local cv = LocalPlayer:FindFirstChild("Cash") or LocalPlayer:WaitForChild("Cash", 2)
+    local cv = LocalPlayer and (LocalPlayer:FindFirstChild("Cash") or LocalPlayer:WaitForChild("Cash", 2))
     CashValue = cv
 end)
-LocalPlayer.ChildAdded:Connect(function(c) if c.Name == "Cash" then CashValue = c end end)
+pcall(function()
+    if LocalPlayer and LocalPlayer.ChildAdded then
+        LocalPlayer.ChildAdded:Connect(function(c) if c.Name == "Cash" then CashValue = c end end)
+    end
+end)
 local function getCash()
     if CashValue and typeof(CashValue.Value) == "number" then return CashValue.Value end
     local cv = LocalPlayer:FindFirstChild("Cash")
