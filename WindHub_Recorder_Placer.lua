@@ -9,6 +9,16 @@ pcall(function()
     local q = queue_on_teleport or (syn and syn.queue_on_teleport) or queueonteleport
     if q then q('loadstring(game:HttpGet("' .. GH_URL .. '"))()') end
 end)
+-- single-instance guard (like Infinite Yield) — if queue_on_teleport fires twice, second load no-ops
+if getgenv and getgenv().WindHubLoaded then return end
+if getgenv then getgenv().WindHubLoaded = true end
+do
+    local has = false
+    pcall(function() has = game:GetService("CoreGui"):FindFirstChild("WindHub_Placer") ~= nil end)
+    if has then return end
+    pcall(function() has = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui") and game:GetService("Players").LocalPlayer.PlayerGui:FindFirstChild("WindHub_Placer") ~= nil end)
+    if has then return end
+end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
