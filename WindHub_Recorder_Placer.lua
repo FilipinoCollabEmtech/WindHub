@@ -998,4 +998,7 @@ AutoPlaceToggle = PlacerTab:Toggle({
     end,
 })
 refreshRecorderParagraph()
-print("[WindHub] Recorder + Placer loaded. Files → " .. FOLDER .. "/")
+local HUB_VERSION = "185cdc8 @ 2026-09-25 01:12 UTC — observer-only, retry-button-only, anti-spam, identity-map"
+print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
+print("[WindHub] raw: https://raw.githubusercontent.com/FilipinoCollabEmtech/WindHub/main/WindHub_Recorder_Placer.lua")
+pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
