@@ -628,34 +628,19 @@ local function doRetry()
 end
 -- also try to click the on-screen Replay button directly if the RemoteEvent alone doesn't retry
 -- You specified: game:GetService("Players").LocalPlayer.PlayerGui.GameGui.EndScreen.Replay
+-- Manual that worked: btn and btn.Visible and btn.Parent.Visible then firesignal(btn.Activated)
 local function getReplayButton()
     local ok, btn = pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        local gg = pg and pg:FindFirstChild("GameGui")
-        local es = gg and gg:FindFirstChild("EndScreen")
-        if not es then return nil end
-        -- must be visible per your request: check EndScreen.Visible
-        if not es.Visible then return nil end
-        local r = es:FindFirstChild("Replay")
-        if r and r:IsA("GuiObject") and r.Visible then return r end
-        -- fallback: any descendant named Replay under EndScreen
-        for _, v in ipairs(es:GetDescendants()) do
-            if v.Name == "Replay" and v:IsA("GuiObject") and v.Visible then return v end
-        end
-        -- fallback: any Replay TextButton under EndScreen
-        for _, v in ipairs(es:GetDescendants()) do
-            if v:IsA("TextButton") and v.Visible and v.Text:lower():find("replay") then return v end
-        end
-        return nil
+        return game:GetService("Players").LocalPlayer.PlayerGui.GameGui.EndScreen.Replay
     end)
-    if ok and btn then return btn end
+    if ok and btn and typeof(btn) == "Instance" and btn:IsA("GuiObject") and btn.Visible and btn.Parent and btn.Parent.Visible then
+        return btn
+    end
     return nil
 end
 local function clickReplayButton()
     local btn = getReplayButton()
     if not btn then return false end
-    -- only method that worked for you: firesignal(btn.Activated) with Visible checks
-    if not (btn.Visible and btn.Parent and btn.Parent.Visible) then return false end
     local ok = pcall(function() firesignal(btn.Activated) end)
     return ok
 end
@@ -668,24 +653,13 @@ pcall(function()
     if rp then
         -- server->client may be OnClientEvent OR client->server FireServer — listen to both where possible
         if rp.OnClientEvent then pcall(function() rp.OnClientEvent:Connect(function(...) if CfgAutoRetry then task.delay(1, doRetry) end end) end) end
-        -- also watch EndScreen.Replay appearing (your path: PlayerGui.GameGui.EndScreen.Replay)
+        -- also watch EndScreen.Replay appearing (your path) — use same Visible check as manual
         local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        if pg then pg.DescendantAdded:Connect(function(obj)
+        if pg then pg.DescendantAdded:Connect(function()
             if not CfgAutoRetry then return end
-            local ok, isReplay = pcall(function()
-                if not obj:IsA("GuiObject") or not obj.Visible then return false end
-                if obj.Name == "Replay" then return true end
-                if obj:IsA("TextButton") and obj.Text:lower():find("replay") then
-                    -- ensure it's under EndScreen
-                    local par = obj.Parent
-                    while par and par ~= pg do
-                        if par.Name == "EndScreen" then return true end
-                        par = par.Parent
-                    end
-                end
-                return false
+            task.delay(0.6, function()
+                if getReplayButton() then doRetry() end
             end)
-            if ok and isReplay then task.delay(0.6, doRetry) end
         end) end
     end
 end)
