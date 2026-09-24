@@ -613,10 +613,13 @@ task.spawn(function()
     end
 end)
 -- server->client level-end signals (all allowed, no client->server hook)
+local lastRetryAt = 0
 local function doRetry()
     if not CfgAutoRetry then return end
+    if os.clock() - lastRetryAt < 5 then return end
     local btn = getReplayButton()
     if not btn then return end
+    lastRetryAt = os.clock()
     retryCount = retryCount + 1
     pcall(function() RetryInfo:SetDesc("Retries: " .. retryCount) end)
     -- exact manual that worked for you
