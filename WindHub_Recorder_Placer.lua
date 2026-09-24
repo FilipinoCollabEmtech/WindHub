@@ -563,17 +563,8 @@ local function doRetry()
         if not retried then
             pcall(function() if clickReplayButton() then retried = true end end)
         end
-        -- after level reload, auto-start placer if we have a file
-        task.delay(retried and 6 or 4, function()
-            if not CfgAutoRetry or not SelectedFile then return end
-            if AutoPlaceToggle and AutoPlaceToggle.Set then
-                pcall(function() AutoPlaceToggle:Set(true) end)
-                notify("Main", "Auto Retry: started placer for " .. SelectedFile .. ".json")
-            else
-                AutoPlacing = true
-                persistPlacer()
-            end
-        end)
+        -- don't auto-enable placer here — Auto Place runs on its own saved state when loaded
+        -- (placed before, this was turning Auto Place on via AutoPlaceToggle:Set(true))
     end)
 end
 -- also try to click the on-screen Replay button directly if the RemoteEvent alone doesn't retry
@@ -1020,6 +1011,16 @@ AutoPlaceToggle = PlacerTab:Toggle({
         end)
     end,
 })
+-- Auto Place saved as ON should run when loaded — WindUI doesn't fire Callback on initial Value, so kick it
+if AutoPlacing and SelectedFile and AutoPlaceToggle then
+    task.delay(1.2, function()
+        if not SelectedFile then return end
+        -- toggle off/on to actually fire the Callback (Value is already true visually)
+        pcall(function() AutoPlaceToggle:Set(false) end)
+        task.wait(0.35)
+        pcall(function() AutoPlaceToggle:Set(true) end)
+    end)
+end
 refreshRecorderParagraph()
 local HUB_VERSION = "2026-09-25 01:14 UTC — EndScreen.Replay pinned (e028f17)"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
