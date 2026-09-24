@@ -614,9 +614,8 @@ pcall(function()
         end) end
     end
 end)
--- timer + UI fallback: when GetTimerValue hits 0/nil after being >5, or Replay button visible, treat as level end
+-- retry only when the Replay button is actually visible (as you asked) — no timer fallback that fires mid-game
 task.spawn(function()
-    local wasRunning = false
     while true do
         task.wait(1)
         if CfgAutoRetry then
@@ -625,21 +624,11 @@ task.spawn(function()
                 local pg = LocalPlayer:FindFirstChild("PlayerGui")
                 if pg then
                     for _, v in ipairs(pg:GetDescendants()) do
-                        if v:IsA("TextButton") and v.Visible and v.Text:lower():find("replay") then hasReplayBtn = true break end
+                        if v:IsA("TextButton") and v.Visible and v.AbsoluteSize.X > 10 and v.Text:lower():find("replay") then hasReplayBtn = true break end
                     end
                 end
             end)
-            if hasReplayBtn then doRetry()
-            end
-            local tv = GetGameTime()
-            if tv ~= nil then
-                if tv > 5 then wasRunning = true
-                elseif wasRunning and tv <= 0.5 then wasRunning = false doRetry() end
-            elseif wasRunning then
-                wasRunning = false doRetry()
-            end
-        else
-            wasRunning = false
+            if hasReplayBtn then doRetry() end
         end
     end
 end)
@@ -876,17 +865,42 @@ AutoPlaceToggle = PlacerTab:Toggle({
                     else
                         local expected = entry.Elapsed or entry.Time or 0
                         local actual = useGameTime and (GetGameTime() or expected) or (os.clock() - playStartClock)
+                        -- skip if this exact spot already has your tower (prevents "You can't place there!" spam)
+                        local occupied = false
+                        do
+                            local folder = Workspace:FindFirstChild("Towers")
+                            if folder and entry.PX ~= nil then
+                                for _, m in ipairs(folder:GetChildren()) do
+                                    if m.Name == entry.Unit and isOwnTower(m) then
+                                        local okp, pv = pcall(function() return m:GetPivot() end)
+                                        if okp and pv then
+                                            local dx = pv.Position.X - entry.PX
+                                            local dy = pv.Position.Y - entry.PY
+                                            local dz = pv.Position.Z - entry.PZ
+                                            if dx*dx+dy*dy+dz*dz < 2*2 then occupied = true break end
+                                        end
+                                    end
+                                end
+                            end
+                        end
                         local args = replayArgs(entry)
                         local success = false
                         local ok, res
-                        if args then
+                        if occupied then
+                            success = true
+                        elseif args then
                             ok, res = pcall(function() return SpawnTower:InvokeServer(unpack(args)) end)
                             if ok and res ~= nil and res ~= false then
                                 local stillThere = false
                                 pcall(function() if typeof(res) == "Instance" and res.Parent then stillThere = true end end)
-                                success = ok and (stillThere or typeof(res) ~= "Instance")
-                                if typeof(res) == "Instance" then success = true end
-                            elseif ok then success = true end
+                                success = stillThere or typeof(res) ~= "Instance"
+                                if typeof(res) == "Instance" and isOwnTower(res) then success = true end
+                            else
+                                -- strict: nil/false from server means rejected (e.g. "You can't place there!") — don't count as success
+                                success = false
+                                -- small cooldown to avoid spam
+                                task.wait(0.5)
+                            end
                         end
                         if success then
                             placed = placed + 1
