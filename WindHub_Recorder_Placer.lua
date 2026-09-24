@@ -560,6 +560,9 @@ local function doRetry()
                 if ed then ed:FireServer("Replay") retried = true end
             end)
         end
+        if not retried then
+            pcall(function() if clickReplayButton() then retried = true end end)
+        end
         -- after level reload, auto-start placer if we have a file
         task.delay(retried and 6 or 4, function()
             if not CfgAutoRetry or not SelectedFile then return end
@@ -573,24 +576,67 @@ local function doRetry()
         end)
     end)
 end
+-- also try to click the on-screen Replay button directly if the RemoteEvent alone doesn't retry
+local function clickReplayButton()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return false end
+    for _, v in ipairs(pg:GetDescendants()) do
+        if v:IsA("TextButton") and v.Visible and v.Text:lower():find("replay") then
+            pcall(function()
+                -- firesignal if available, else direct Activated
+                if firesignal then firesignal(v.Activated) else v:Activate() end
+                -- fallback: VirtualInputManager click at AbsolutePosition
+                local ok, vim = pcall(function() return game:GetService("VirtualInputManager") end)
+                if ok and vim and v.AbsolutePosition then
+                    vim:SendMouseButtonEvent(v.AbsolutePosition.X + v.AbsoluteSize.X/2, v.AbsolutePosition.Y + v.AbsoluteSize.Y/2, 0, true, game, 0)
+                    vim:SendMouseButtonEvent(v.AbsolutePosition.X + v.AbsoluteSize.X/2, v.AbsolutePosition.Y + v.AbsoluteSize.Y/2, 0, false, game, 0)
+                end
+            end)
+            return true
+        end
+    end
+    return false
+end
 pcall(function()
     local ed = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("EndDecision")
     if ed and ed.OnClientEvent then ed.OnClientEvent:Connect(function(...) if CfgAutoRetry then task.delay(1, doRetry) end end) end
 end)
 pcall(function()
     local rp = ReplicatedStorage:FindFirstChild("ReplayButtonPressed")
-    if rp and rp.OnClientEvent then rp.OnClientEvent:Connect(function(...) if CfgAutoRetry then task.delay(1, doRetry) end end) end
+    if rp then
+        -- server->client may be OnClientEvent OR client->server FireServer — listen to both where possible
+        if rp.OnClientEvent then pcall(function() rp.OnClientEvent:Connect(function(...) if CfgAutoRetry then task.delay(1, doRetry) end end) end) end
+        -- also watch PlayerGui for a Replay button appearing (covers UI-driven flow)
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then pg.DescendantAdded:Connect(function(obj)
+            if not CfgAutoRetry then return end
+            if obj:IsA("TextButton") and obj.Text:lower():find("replay") then task.delay(0.6, doRetry) end
+        end) end
+    end
 end)
--- timer fallback: when GetTimerValue hits 0 after being >5, treat as level end
+-- timer + UI fallback: when GetTimerValue hits 0/nil after being >5, or Replay button visible, treat as level end
 task.spawn(function()
     local wasRunning = false
     while true do
         task.wait(1)
         if CfgAutoRetry then
+            local hasReplayBtn = false
+            pcall(function()
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                if pg then
+                    for _, v in ipairs(pg:GetDescendants()) do
+                        if v:IsA("TextButton") and v.Visible and v.Text:lower():find("replay") then hasReplayBtn = true break end
+                    end
+                end
+            end)
+            if hasReplayBtn then doRetry()
+            end
             local tv = GetGameTime()
             if tv ~= nil then
                 if tv > 5 then wasRunning = true
                 elseif wasRunning and tv <= 0.5 then wasRunning = false doRetry() end
+            elseif wasRunning then
+                wasRunning = false doRetry()
             end
         else
             wasRunning = false
