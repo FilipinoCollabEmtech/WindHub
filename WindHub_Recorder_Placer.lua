@@ -654,25 +654,10 @@ end
 local function clickReplayButton()
     local btn = getReplayButton()
     if not btn then return false end
-    local ok, vim = pcall(function() return game:GetService("VirtualInputManager") end)
-    if not ok or not vim then return false end
-    local ok2, inset = pcall(function() return game:GetService("GuiService"):GetGuiInset() end)
-    if not ok2 or not inset then inset = Vector2.new(0, 0) end
-    local sg = btn:FindFirstAncestorOfClass("ScreenGui")
-    local ignore = sg and sg.IgnoreGuiInset
-    local cx = btn.AbsolutePosition.X + btn.AbsoluteSize.X / 2
-    local cy = btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2
-    -- AbsolutePosition is viewport-relative; if ScreenGui does NOT ignore inset, add top-bar offset
-    if not ignore then
-        cx = cx + inset.X
-        cy = cy + inset.Y
-    end
-    pcall(function()
-        vim:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
-        task.wait(0.08)
-        vim:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
-    end)
-    return true
+    -- only method that worked for you: firesignal(btn.Activated) with Visible checks
+    if not (btn.Visible and btn.Parent and btn.Parent.Visible) then return false end
+    local ok = pcall(function() firesignal(btn.Activated) end)
+    return ok
 end
 pcall(function()
     local ed = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("EndDecision")
