@@ -713,31 +713,47 @@ task.spawn(function()
         end
     end
 end)
--- Auto Mutations — listen to SlopMutator Votes, pick 1 or 2 if offered
+-- Auto Mutations — like AutoSkip: vote immediately on Vote payload, keep voting until Active
+local offeredIds = {} -- latest Vote payload Ids
+local lastVotedMut = nil
 pcall(function()
     local sm = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("SlopMutator")
     if sm and sm.OnClientEvent then
         sm.OnClientEvent:Connect(function(kind, payload)
-            if not CfgAutoMut then return end
-            if kind ~= "Votes" or type(payload) ~= "table" then return end
-            -- payload e.g. {Gigantism=1, Regeneration=0, BossRush=0, None=0}
-            local offered = {}
-            for k in pairs(payload) do table.insert(offered, tostring(k)) end
-            local pick = nil
-            for _, choice in ipairs({CfgMut1, CfgMut2}) do
-                for _, off in ipairs(offered) do
-                    if off:lower() == tostring(choice):lower() and off:lower() ~= "none" then pick = off break end
+            if kind == "Vote" and type(payload) == "table" then
+                offeredIds = {}
+                for _, entry in ipairs(payload) do
+                    local id = tostring(entry.Id or entry.id or "")
+                    if id ~= "" then table.insert(offeredIds, id) end
                 end
-                if pick then break end
-            end
-            if pick then
-                task.wait(0.4 + math.random()*0.6)
-                pcall(function() sm:FireServer("Vote", pick) end)
-                notify("Main", "Voted mutation: " .. pick)
-            else
-                -- neither choice offered — skip as you asked
+            elseif kind == "Active" then
+                offeredIds = {}
+                lastVotedMut = nil
             end
         end)
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.6)
+        if CfgAutoMut and #offeredIds > 0 then
+            local sm = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("SlopMutator")
+            if sm then
+                local pick = nil
+                for _, choice in ipairs({CfgMut1, CfgMut2}) do
+                    for _, off in ipairs(offeredIds) do
+                        if off:lower() == tostring(choice):lower() and off:lower() ~= "none" then pick = off break end
+                    end
+                    if pick then break end
+                end
+                -- neither choice offered — skip as you asked (don't vote)
+                if pick and pick ~= lastVotedMut then
+                    pcall(function() sm:FireServer("Vote", pick) end)
+                    lastVotedMut = pick
+                    notify("Main", "Voted mutation: " .. pick)
+                end
+            end
+        end
     end
 end)
 -- server->client level-end signals (all allowed, no client->server hook)
