@@ -196,7 +196,7 @@ local function saveSettings(data)
 end
 local SelectedFile; local AutoPlacing; local CfgAutoUpgrade; local CfgNotify; local CfgIgnoreTime; local CfgAutoRetry; local PlacerDropdown; local AutoPlaceToggle
 local CfgAutoSpeed; local CfgSpeedValue
-local CfgAutoSkill; local CfgAutoMut; local CfgMut1; local CfgMut2
+local CfgAutoSkill; local CfgAutoMut; local CfgMut1; local CfgMut2; local CfgMut3
 local getReplayButton; local clickReplayButton
 local _settings = loadSettings()
 SelectedFile = _settings.SelectedFile
@@ -211,6 +211,7 @@ CfgAutoSkill = _settings.AutoSkill == true
 CfgAutoMut = _settings.AutoMut == true
 CfgMut1 = _settings.Mut1 or "Gigantism"
 CfgMut2 = _settings.Mut2 or "Regeneration"
+CfgMut3 = _settings.Mut3 or "BossRush"
 AntiMacroBypass = _settings.BypassAntiMacro == true
 setAntiMacroBypass(AntiMacroBypass)
 local function persistPlacer()
@@ -228,6 +229,7 @@ local function persistPlacer()
         AutoMut = CfgAutoMut,
         Mut1 = CfgMut1,
         Mut2 = CfgMut2,
+        Mut3 = CfgMut3,
         AutoSpeed = CfgAutoSpeed,
         SpeedValue = CfgSpeedValue,
     })
@@ -643,10 +645,17 @@ MainTab:Dropdown({
 })
 MainTab:Dropdown({
     Title = "Mutation Choice 2",
-    Desc = "Second pick — if 1 not offered but 2 is, votes 2. If neither, skips.",
+    Desc = "Second pick — if 1 not offered but 2 is, votes 2.",
     Values = MUT_CHOICES,
     Value = CfgMut2,
     Callback = function(opt) if type(opt)=="table" then opt=opt[1] end CfgMut2=tostring(opt) persistPlacer() end,
+})
+MainTab:Dropdown({
+    Title = "Mutation Choice 3",
+    Desc = "Third pick — if 1/2 not offered but 3 is, votes 3. If none, skips.",
+    Values = MUT_CHOICES,
+    Value = CfgMut3,
+    Callback = function(opt) if type(opt)=="table" then opt=opt[1] end CfgMut3=tostring(opt) persistPlacer() end,
 })
 -- keep dropdowns in sync when server sends new Vote payload with unseen Ids
 pcall(function()
@@ -740,7 +749,7 @@ task.spawn(function()
             local sm = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("SlopMutator")
             if sm then
                 local pick = nil
-                for _, choice in ipairs({CfgMut1, CfgMut2}) do
+                for _, choice in ipairs({CfgMut1, CfgMut2, CfgMut3}) do
                     for _, off in ipairs(offeredIds) do
                         if off:lower() == tostring(choice):lower() and off:lower() ~= "none" then pick = off break end
                     end
