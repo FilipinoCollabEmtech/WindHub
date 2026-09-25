@@ -97,12 +97,17 @@ local function setAntiMacroBypass(on)
         if g then g:Destroy() end
     end)
 end
-pcall(function()
-    local am = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("AntiMacro")
-    if not am then return end
-    local chk = am:FindFirstChild("Check")
-    local rsp = am:FindFirstChild("Respond")
-    if chk and rsp and chk.OnClientEvent then
+local antiMacroOk = false
+local function ensureAntiMacro()
+    if antiMacroOk then return true end
+    local ok, am = pcall(function()
+        return ReplicatedStorage:WaitForChild("Events", 10):WaitForChild("AntiMacro", 10)
+    end)
+    if not ok or not am then return false end
+    local chk = am:WaitForChild("Check", 10)
+    local rsp = am:WaitForChild("Respond", 10)
+    if not chk or not rsp then return false end
+    local ok2 = pcall(function()
         chk.OnClientEvent:Connect(function(p1, p2, p3, p4)
             if not AntiMacroBypass then return end
             -- human-like 0.8-2.2s delay, then bot-solve the RemoteEvent Check -> Respond
@@ -115,8 +120,11 @@ pcall(function()
                 end)
             end)
         end)
-    end
-end)
+    end)
+    if ok2 then antiMacroOk = true end
+    return antiMacroOk
+end
+task.spawn(function() while not ensureAntiMacro() do task.wait(3) end end)
 
 -- Price + Cash helpers — server truth only, no require
 local CashValue = nil
@@ -633,7 +641,7 @@ MainTab:Toggle({
     Title = "Auto Choose Mutations",
     Desc = "Auto votes SlopMutator from your two choices. If neither is offered, skips.",
     Value = CfgAutoMut,
-    Callback = function(state) CfgAutoMut = (state == true) persistPlacer() notify("Main", "Auto Mutations " .. (CfgAutoMut and "ON" or "OFF")) end,
+    Callback = function(state) CfgAutoMut = (state == true) persistPlacer() if state and type(mutSync) == "function" then mutSync() end notify("Main", "Auto Mutations " .. (CfgAutoMut and "ON" or "OFF")) end,
 })
 local MUT_CHOICES = {"Gigantism","Regeneration","BossRush","Blackout","Invasion","None","Speedy","Rapid","Tank","Heavy","Giant","Regenerating","Elite","Mini Boss","Berserker","Random"}
 MainTab:Dropdown({
@@ -690,11 +698,12 @@ task.spawn(function()
 end)
 -- Auto Skill loop — observer-only, uses ActivateAbility per tower
 task.spawn(function()
-    local GetCD = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("GetAbilityCooldown")
-    local Activate = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("ActivateAbility")
-    local AbilityAuto = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("AbilityAuto")
     while true do
         task.wait(0.7)
+        -- lookups inside the loop: at load these may not be replicated yet
+        local GetCD = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("GetAbilityCooldown")
+        local Activate = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("ActivateAbility")
+        local AbilityAuto = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("AbilityAuto")
         if CfgAutoSkill and Activate then
             local folder = Workspace:FindFirstChild("Towers")
             if folder then
@@ -725,22 +734,48 @@ end)
 -- Auto Mutations — like AutoSkip: vote immediately on Vote payload, keep voting until Active
 local offeredIds = {} -- latest Vote payload Ids
 local lastVotedMut = nil
-pcall(function()
-    local sm = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("SlopMutator")
-    if sm and sm.OnClientEvent then
+local lastVotedMutAt = 0
+local mutOfferedSig = ""
+local mutListenerOk = false
+local function ensureMutListener()
+    if mutListenerOk then return true end
+    local ok, sm = pcall(function()
+        return ReplicatedStorage:WaitForChild("Events", 10):WaitForChild("SlopMutator", 10)
+    end)
+    if not ok or not sm then return false end
+    local ok2 = pcall(function()
         sm.OnClientEvent:Connect(function(kind, payload)
             if kind == "Vote" and type(payload) == "table" then
-                offeredIds = {}
+                local ids, sig = {}, {}
                 for _, entry in ipairs(payload) do
-                    local id = tostring(entry.Id or entry.id or "")
-                    if id ~= "" then table.insert(offeredIds, id) end
+                    local id = tostring((type(entry) == "table" and (entry.Id or entry.id)) or "")
+                    if id ~= "" then table.insert(ids, id) table.insert(sig, id) end
                 end
+                local newSig = table.concat(sig, "|")
+                if newSig ~= "" and newSig ~= mutOfferedSig then
+                    mutOfferedSig = newSig
+                    lastVotedMut = nil -- new round: allow voting again
+                end
+                offeredIds = ids
             elseif kind == "Active" then
                 offeredIds = {}
+                mutOfferedSig = ""
                 lastVotedMut = nil
             end
         end)
+    end)
+    if ok2 then mutListenerOk = true end
+    return mutListenerOk
+end
+local function mutSync()
+    if ensureMutListener() then
+        -- game client itself fires Sync at startup; re-asks in case we loaded mid-vote
+        pcall(function() ReplicatedStorage.Events.SlopMutator:FireServer("Sync") end)
     end
+end
+task.spawn(function()
+    while not ensureMutListener() do task.wait(3) end
+    mutSync()
 end)
 task.spawn(function()
     while true do
@@ -756,10 +791,15 @@ task.spawn(function()
                     if pick then break end
                 end
                 -- neither choice offered — skip as you asked (don't vote)
-                if pick and pick ~= lastVotedMut then
-                    pcall(function() sm:FireServer("Vote", pick) end)
-                    lastVotedMut = pick
-                    notify("Main", "Voted mutation: " .. pick)
+                if pick then
+                    local now = os.clock()
+                    -- re-vote every ~3s until Active (votes are idempotent; keeps vote alive)
+                    if pick ~= lastVotedMut or (now - lastVotedMutAt) >= 3 then
+                        pcall(function() sm:FireServer("Vote", pick) end)
+                        lastVotedMut = pick
+                        lastVotedMutAt = now
+                        notify("Main", "Voted mutation: " .. pick)
+                    end
                 end
             end
         end
@@ -1257,6 +1297,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-25 23:05 UTC"
+local HUB_VERSION = "2026-09-25 23:11 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
