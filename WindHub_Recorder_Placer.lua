@@ -640,12 +640,21 @@ MainTab:Toggle({
     Value = CfgAutoSkill,
     Callback = function(state) CfgAutoSkill = (state == true) persistPlacer() notify("Main", "Auto Skill " .. (CfgAutoSkill and "ON" or "OFF")) end,
 })
+local SpamStats = {skills = 0, replaced = 0, failed = 0}
+local SpamInfo = nil
 MainTab:Toggle({
     Title = "Spam Ability [Bypass]",
     Desc = "Skill -> sell -> replace fresh (cooldown reset) -> skill again. Server-confirmed each step.",
     Value = CfgSpamAbility,
-    Callback = function(state) CfgSpamAbility = (state == true) persistPlacer() notify("Main", "Spam Ability " .. (CfgSpamAbility and "ON" or "OFF")) end,
+    Callback = function(state)
+        CfgSpamAbility = (state == true)
+        persistPlacer()
+        if state then SpamStats = {skills = 0, replaced = 0, failed = 0} end
+        pcall(function() SpamInfo:SetTitle("Spam Ability: " .. (CfgSpamAbility and "running" or "idle")) end)
+        notify("Main", "Spam Ability " .. (CfgSpamAbility and "ON" or "OFF"))
+    end,
 })
+SpamInfo = MainTab:Paragraph({ Title = "Spam Ability: idle", Desc = "Skills: 0 | Replaced: 0 | Failed: 0" })
 MainTab:Toggle({
     Title = "Auto Choose Mutations",
     Desc = "Auto votes SlopMutator from your two choices. If neither is offered, skips.",
@@ -1317,6 +1326,7 @@ local function onAutoPlace(state)
 -- Spam Ability [Bypass] engine: skill -> sell -> replace fresh -> skill again.
 -- Every step confirmed via server->client truth (cooldown active / removed /
 -- spawned). No hooks. Own replaces are hidden from the recorder.
+local spamStatus
 local function spamAbilityCycle(m)
     local GetCD = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("GetAbilityCooldown")
     local Activate = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("ActivateAbility")
@@ -1337,6 +1347,8 @@ local function spamAbilityCycle(m)
         end
         if not fired then return end
     end
+    SpamStats.skills = SpamStats.skills + 1
+    spamStatus("skill fired, selling " .. tostring(m.Name))
     -- 3. snapshot replace data BEFORE sell
     local unit = tostring(m.Name)
     local pv = getTowerPos(m)
@@ -1364,7 +1376,12 @@ local function spamAbilityCycle(m)
             end
         end
     end
-    if not sold then return end -- don't place a duplicate
+    if not sold then
+        SpamStats.failed = SpamStats.failed + 1
+        spamStatus("sell failed, skipped")
+        notify("Main", "Spam Ability: sell failed — skipped (no duplicate placed)", 4)
+        return
+    end
     if not CfgSpamAbility then return end
     -- 5. replace fresh + confirm spawned
     SuppressRecordUntil = os.clock() + 3
@@ -1384,9 +1401,16 @@ local function spamAbilityCycle(m)
             task.wait(0.15)
         end
     end
-    if not fresh or not alive(fresh) then return end
-    -- 6. fire skill on the fresh tower (cooldown was reset by replace)
+    if not fresh or not alive(fresh) then
+        SpamStats.failed = SpamStats.failed + 1
+        spamStatus("replace FAILED (tower lost)")
+        notify("Main", "Spam Ability: LOST " .. unit .. " (sold, replace failed)", 5)
+        return
+    end
+    -- 6. fire skill on the fresh tower (cooldown reset by replace)
     pcall(function() Activate:FireServer(fresh) end)
+    SpamStats.replaced = SpamStats.replaced + 1
+    spamStatus("replaced + fired: " .. unit)
 end
 task.spawn(function()
     while true do
@@ -1412,6 +1436,13 @@ task.spawn(function()
         end
     end
 end)
+spamStatus = function(text)
+    if SpamInfo == nil or SpamStats == nil then return end
+    pcall(function()
+        SpamInfo:SetTitle("Spam Ability: " .. text)
+        SpamInfo:SetDesc(("Skills: %d | Replaced: %d | Failed: %d"):format(SpamStats.skills, SpamStats.replaced, SpamStats.failed))
+    end)
+end
 AutoPlaceToggle = PlacerTab:Toggle({
     Title = "Auto Place",
     Desc = "Places units from the file when game time >= recorded time.",
@@ -1439,6 +1470,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 01:24 UTC"
+local HUB_VERSION = "2026-09-26 01:31 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
