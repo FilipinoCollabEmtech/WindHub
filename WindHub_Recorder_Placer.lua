@@ -98,7 +98,7 @@ local function setAntiMacroBypass(on)
     end)
 end
 local antiMacroOk = false
-local function ensureAntiMacro()
+ensureAntiMacro = function()
     if antiMacroOk then return true end
     local ok, am = pcall(function()
         return ReplicatedStorage:WaitForChild("Events", 10):WaitForChild("AntiMacro", 10)
@@ -205,7 +205,7 @@ end
 local SelectedFile; local AutoPlacing; local CfgAutoUpgrade; local CfgNotify; local CfgIgnoreTime; local CfgAutoRetry; local PlacerDropdown; local AutoPlaceToggle
 local CfgAutoSpeed; local CfgSpeedValue
 local CfgAutoSkill; local CfgAutoMut; local CfgMut1; local CfgMut2; local CfgMut3
-local getReplayButton; local clickReplayButton
+local getReplayButton; local clickReplayButton; local mutSync; local ensureMutListener; local ensureAntiMacro
 local _settings = loadSettings()
 SelectedFile = _settings.SelectedFile
 AutoPlacing = _settings.AutoPlace == true
@@ -238,8 +238,6 @@ local function persistPlacer()
         Mut1 = CfgMut1,
         Mut2 = CfgMut2,
         Mut3 = CfgMut3,
-        AutoSpeed = CfgAutoSpeed,
-        SpeedValue = CfgSpeedValue,
     })
 end
 -- Auto speed helper — tries ChangeSpeed / SpeedUp / SpeedUp2 remotes
@@ -737,7 +735,7 @@ local lastVotedMut = nil
 local lastVotedMutAt = 0
 local mutOfferedSig = ""
 local mutListenerOk = false
-local function ensureMutListener()
+ensureMutListener = function()
     if mutListenerOk then return true end
     local ok, sm = pcall(function()
         return ReplicatedStorage:WaitForChild("Events", 10):WaitForChild("SlopMutator", 10)
@@ -767,7 +765,7 @@ local function ensureMutListener()
     if ok2 then mutListenerOk = true end
     return mutListenerOk
 end
-local function mutSync()
+mutSync = function()
     if ensureMutListener() then
         -- game client itself fires Sync at startup; re-asks in case we loaded mid-vote
         pcall(function() ReplicatedStorage.Events.SlopMutator:FireServer("Sync") end)
@@ -831,9 +829,12 @@ getReplayButton = function()
     local ok, btn = pcall(function()
         return game:GetService("Players").LocalPlayer.PlayerGui.GameGui.EndScreen.Replay
     end)
-    if ok and btn and typeof(btn) == "Instance" and btn:IsA("GuiObject") and btn.Visible and btn.Parent and btn.Parent.Visible then
-        return btn
-    end
+    if not ok or typeof(btn) ~= "Instance" then return nil end
+    local ok2, vis = pcall(function()
+        local isGui = btn:IsA("GuiObject")
+        return isGui and btn.Visible and btn.Parent and btn.Parent.Visible
+    end)
+    if ok2 and vis then return btn end
     return nil
 end
 clickReplayButton = function()
@@ -1297,6 +1298,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-25 23:11 UTC"
+local HUB_VERSION = "2026-09-25 23:15 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
