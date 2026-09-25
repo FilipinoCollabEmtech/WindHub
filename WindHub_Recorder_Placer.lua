@@ -1185,14 +1185,28 @@ AutoPlaceToggle = PlacerTab:Toggle({
         end)
     end,
 })
--- Auto Place saved as ON should run when loaded — WindUI doesn't fire Callback on initial Value, so kick it
-if AutoPlacing and SelectedFile and AutoPlaceToggle then
-    task.delay(1.2, function()
-        if not SelectedFile then return end
-        -- toggle off/on to actually fire the Callback (Value is already true visually)
-        pcall(function() AutoPlaceToggle:Set(false) end)
-        task.wait(0.35)
-        pcall(function() AutoPlaceToggle:Set(true) end)
+-- Auto Place saved as ON should run when loaded — WindUI doesn't fire Callback on initial Value.
+-- Root causes fixed: (1) this runs after AutoPlaceToggle exists; (2) no caller clears AutoPlacing;
+-- (3) kick happens even if SelectedFile arrives late via await.
+if AutoPlacing and AutoPlaceToggle then
+    task.spawn(function()
+        -- wait for file selection (may replicate late after teleport)
+        local waited = 0
+        while not SelectedFile and waited < 15 do task.wait(1) waited = waited + 1 end
+        if not SelectedFile then
+            notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
+            pcall(function() AutoPlaceToggle:Set(false) end)
+            return
+        end
+        -- keep trying to trigger the Callback until the loop actually starts
+        for _ = 1, 6 do
+            pcall(function() AutoPlaceToggle:Set(false) end)
+            task.wait(0.5)
+            pcall(function() AutoPlaceToggle:Set(true) end)
+            task.wait(1.5)
+            -- if loop started, AutoPlacing stays true and placerStatus shows ON — stop kicking
+            if AutoPlacing then break end
+        end
     end)
 end
 refreshRecorderParagraph()
