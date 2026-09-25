@@ -970,8 +970,25 @@ function refreshPlacerList()
 end
 PlacerTab:Button({ Title = "Refresh Files", Desc = "Re-scan for newer recorded files.", Callback = function() refreshPlacerList() end })
 PlacerInfo = PlacerTab:Paragraph({ Title = "Auto Place: OFF", Desc = "Select a file above, then enable Auto Place." })
+local PlacerBar = nil
+PlacerBar = PlacerTab:ProgressBar({
+    Title = "Run Progress",
+    Desc = "Placements + upgrades completed",
+    Value = { Min = 0, Max = 100, Default = 0 },
+    ShowValue = true,
+    DisplayMode = "Percent",
+    Animate = true,
+    AnimationDuration = 0.35,
+})
 local function placerStatus(placed, total, upDone, upTotal)
     setParagraph(PlacerInfo, "Auto Place: " .. (AutoPlacing and "ON" or "OFF"), ("File: %s | Placed %d/%d | Upgraded %d/%d"):format(SelectedFile and (SelectedFile .. ".json") or "none", placed or 0, total or 0, upDone or 0, upTotal or 0))
+    pcall(function()
+        if PlacerBar then
+            local t = (total or 0) + (upTotal or 0)
+            local d = (placed or 0) + (upDone or 0)
+            if t > 0 then PlacerBar:Set(d / t * 100) else PlacerBar:Set(0) end
+        end
+    end)
 end
 local function replayArgs(entry)
     if type(entry.Args) ~= "table" then return nil end
@@ -1299,6 +1316,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-25 23:28 UTC"
+local HUB_VERSION = "2026-09-26 01:07 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
