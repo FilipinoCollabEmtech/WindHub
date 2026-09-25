@@ -1330,29 +1330,32 @@ local spamStatus
 local function spamAbilityCycle(m)
     local GetCD = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("GetAbilityCooldown")
     local Activate = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("ActivateAbility")
-    if not Activate then return end
+    local SellRemote = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("SellTower")
+    if not Activate then spamStatus("no ActivateAbility remote") return end
+    if not SellRemote then spamStatus("no SellTower remote") return end
     local function alive(t) return t ~= nil and t.Parent ~= nil and isOwnTower(t) end
     if not alive(m) then return end
-    -- 1. fire skill
-    local okA = pcall(function() Activate:FireServer(m) end)
-    if not okA then return end
-    -- 2. confirm skill went on cooldown (server truth) — else don't sell
-    if GetCD then
-        local fired, t0 = false, os.clock()
-        while os.clock() - t0 < 1.2 do
-            if not CfgSpamAbility or not alive(m) then return end
-            local ok, cd = pcall(function() return GetCD:InvokeServer(m) end)
-            if ok and tonumber(cd) ~= nil and tonumber(cd) > 0.2 then fired = true break end
-            task.wait(0.1)
-        end
-        if not fired then return end
-    end
-    SpamStats.skills = SpamStats.skills + 1
-    spamStatus("skill fired, selling " .. tostring(m.Name))
-    -- 3. snapshot replace data BEFORE sell
     local unit = tostring(m.Name)
+    -- 1. skill ready? check BEFORE firing (some abilities never report cooldown after, so no post-fire gate)
+    if GetCD then
+        local ok, cd = pcall(function() return GetCD:InvokeServer(m) end)
+        if not (ok and tonumber(cd) ~= nil and tonumber(cd) <= 0.2) then
+            spamStatus("cooldown not ready: " .. unit)
+            return
+        end
+    end
+    -- 2. fire skill (errors shown, not swallowed)
+    local okA, errA = pcall(function() Activate:FireServer(m) end)
+    if not okA then
+        spamStatus("activate error: " .. tostring(errA):sub(1, 60))
+        return
+    end
+    task.wait(0.4) -- let server apply; no cooldown-shape assumption afterward
+    if not CfgSpamAbility or not alive(m) then return end
+    SpamStats.skills = SpamStats.skills + 1
+    -- 3. snapshot replace data BEFORE sell
     local pv = getTowerPos(m)
-    if not pv then return end
+    if not pv then spamStatus("no pivot: " .. unit) return end
     local price = readTowerPrice(m)
     local trait = getTowerTrait(m)
     local skin = getTowerSkin(unit, trait)
@@ -1360,13 +1363,16 @@ local function spamAbilityCycle(m)
     local need = tonumber(price)
     if need then
         local have = getCash()
-        if have ~= nil and (have + math.floor(need / 5)) < need then return end -- wait for cash next round
+        if have ~= nil and (have + math.floor(need / 5)) < need then
+            spamStatus(("waiting cash %s/%s: %s"):format(fmtMoney(have), fmtMoney(need), unit))
+            return
+        end
     end
-    -- 4. sell + confirm removed
-    if not SellTowerRemote then return end
+    spamStatus("skill fired, selling " .. unit)
+    -- 4. sell + confirm removed (essential: never duplicate)
     local sold = false
     do
-        local okS = pcall(function() return SellTowerRemote:InvokeServer(m) end)
+        local okS, errS = pcall(function() return SellRemote:InvokeServer(m) end)
         if okS then
             local t0 = os.clock()
             while os.clock() - t0 < 2 do
@@ -1374,6 +1380,8 @@ local function spamAbilityCycle(m)
                 if not m.Parent then sold = true break end
                 task.wait(0.1)
             end
+        else
+            spamStatus("sell invoke failed: " .. tostring(errS):sub(1, 60))
         end
     end
     if not sold then
@@ -1436,7 +1444,10 @@ task.spawn(function()
         end
     end
 end)
+local lastSpamText = ""
 spamStatus = function(text)
+    if text == lastSpamText then return end
+    lastSpamText = text
     if SpamInfo == nil or SpamStats == nil then return end
     pcall(function()
         SpamInfo:SetTitle("Spam Ability: " .. text)
@@ -1470,6 +1481,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 01:31 UTC"
+local HUB_VERSION = "2026-09-26 01:43 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
