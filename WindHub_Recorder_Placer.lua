@@ -942,6 +942,36 @@ local function replayArgs(entry)
     end
     return out
 end
+local function snapshotTowers()
+    local s = {}
+    local folder = Workspace:FindFirstChild("Towers")
+    if folder then for _, m in ipairs(folder:GetChildren()) do s[m] = true end end
+    return s
+end
+-- after firing SpawnTower, wait for YOUR new tower to actually spawn (lag-proof)
+local function confirmNewTower(unit, px, py, pz, beforeSet, timeout)
+    local t0 = os.clock()
+    while os.clock() - t0 < (timeout or 3) do
+        local folder = Workspace:FindFirstChild("Towers")
+        if folder then
+            for _, m in ipairs(folder:GetChildren()) do
+                if not beforeSet[m] and m.Name == unit and isOwnTower(m) then
+                    if px == nil then beforeSet[m] = true return m end
+                    local okp, pv = pcall(function() return m:GetPivot() end)
+                    if okp and pv then
+                        local dx = pv.Position.X - px
+                        local dy = pv.Position.Y - py
+                        local dz = pv.Position.Z - pz
+                        if dx*dx+dy*dy+dz*dz < 2.5*2.5 then beforeSet[m] = true return m end
+                    end
+                end
+            end
+        end
+        if not AutoPlacing then return nil end
+        task.wait(0.2)
+    end
+    return nil
+end
 local UPGRADE_MAX_ATTEMPTS = 40
 local UPGRADE_RETRY_DELAY = 0.8
 local function findLiveTower(unit, px, py, pz)
@@ -1007,14 +1037,12 @@ PlacerTab:Toggle({
     Value = CfgIgnoreTime,
     Callback = function(state) CfgIgnoreTime = (state == true) ;persistPlacer() end,
 })
-AutoPlaceToggle = PlacerTab:Toggle({
-    Title = "Auto Place",
-    Desc = "Places units from the file when game time >= recorded time.",
-    Value = AutoPlacing,
-    Callback = function(state)
-        AutoPlacing = state and true or false
-        persistPlacer()
-        if not AutoPlacing then placerStatus() ;return end
+local PlacerRunning = false
+local function onAutoPlace(state)
+    if state and PlacerRunning then AutoPlacing = true return end
+    AutoPlacing = state and true or false
+    persistPlacer()
+    if not AutoPlacing then placerStatus() ;return end
         if not SelectedFile then notify("Placer", "Select a recorded file first.", 4) ;AutoPlacing = false persistPlacer() return end
         if not SpawnTower then notify("Placer", "SpawnTower remote not found.", 5) ;AutoPlacing = false persistPlacer() return end
         task.spawn(function()
@@ -1040,6 +1068,8 @@ AutoPlaceToggle = PlacerTab:Toggle({
                 return (os.clock() - playStartClock) >= (entry.Elapsed or 0)
             end
             local placed, placeIdx = 0, 1
+            local placeAttempts, placeNextRetry, pendingSpend = 0, 0, 0
+            local PLACE_MAX_ATTEMPTS = 5
             local upDone = 0
             local upState = {}
             for i = 1, #upgrades do upState[i] = { attempts = 0, nextRetry = 0, done = false } end
@@ -1058,18 +1088,23 @@ AutoPlaceToggle = PlacerTab:Toggle({
                 return nil
             end
             placerStatus(placed, #places, upDone, upTotal())
+            PlacerRunning = true
             while AutoPlacing and (placeIdx <= #places or (doUpgrades and upDone < #upgrades)) do
-                if placeIdx <= #places and timeReady(places[placeIdx]) then
+                if placeIdx <= #places and os.clock() >= placeNextRetry and timeReady(places[placeIdx]) then
                     local entry = places[placeIdx]
                     local need = tonumber(entry.Price)
                     local have = getCash()
-                    if need and have ~= nil and have < need then
-                        setParagraph(PlacerInfo, "Auto Place: ON (waiting cash)", ("Need %s have %s for %s @ %s — waiting..."):format(fmtMoney(need), fmtMoney(have), entry.Unit, entry.Loc))
+                    -- calculate ahead: cash already committed to in-flight placements (lag) counts too,
+                    -- so "can I buy 2-3 more or just 1" is answered against real balance, not stale display
+                    local effHave = (have ~= nil) and (have - pendingSpend) or nil
+                    if need and effHave ~= nil and effHave < need then
+                        setParagraph(PlacerInfo, "Auto Place: ON (waiting cash)", ("Need %s have %s for %s @ %s — waiting..."):format(fmtMoney(need), fmtMoney(effHave), entry.Unit, entry.Loc))
+                        placeNextRetry = os.clock() + 0.6
                     else
                         local expected = entry.Elapsed or entry.Time or 0
                         local actual = useGameTime and (GetGameTime() or expected) or (os.clock() - playStartClock)
-                        -- skip if this exact spot already has your tower (prevents "You can't place there!" spam)
-                        local occupied = false
+                        -- skip only if essentially the same spot (<0.75) already has your tower
+                        local occupant = nil
                         do
                             local folder = Workspace:FindFirstChild("Towers")
                             if folder and entry.PX ~= nil then
@@ -1080,65 +1115,66 @@ AutoPlaceToggle = PlacerTab:Toggle({
                                             local dx = pv.Position.X - entry.PX
                                             local dy = pv.Position.Y - entry.PY
                                             local dz = pv.Position.Z - entry.PZ
-                                            if dx*dx+dy*dy+dz*dz < 2*2 then occupied = true break end
+                                            if dx*dx+dy*dy+dz*dz < 0.75*0.75 then occupant = m break end
                                         end
                                     end
                                 end
                             end
                         end
                         local args = replayArgs(entry)
-                        local success = false
-                        local ok, res
-                        if occupied then
-                            success = true
-                        elseif args then
-                            ok, res = pcall(function() return SpawnTower:InvokeServer(unpack(args)) end)
-                            if ok and res ~= nil and res ~= false then
-                                local stillThere = false
-                                pcall(function() if typeof(res) == "Instance" and res.Parent then stillThere = true end end)
-                                success = stillThere or typeof(res) ~= "Instance"
-                                if typeof(res) == "Instance" and isOwnTower(res) then success = true end
-                            else
-                                -- strict: nil/false from server means rejected (e.g. "You can't place there!") — don't count as success
-                                success = false
-                                -- small cooldown to avoid spam
-                                task.wait(0.5)
-                            end
-                        end
-                        if success then
+                        if occupant then
+                            -- essentially same spot: count it, map identity for upgrades
                             placed = placed + 1
-                            -- log identity for upgrades: which live tower was placed at this recorded spot
-                            local liveTower = nil
-                            if typeof(res) == "Instance" and pcall(function() return liveTower or res:IsA("Model") end) and isOwnTower(res) then
-                                liveTower = res
+                            local k = posKey(entry.PX, entry.PY, entry.PZ)
+                            if k then placedByPos[k] = occupant end
+                            if CfgNotify then
+                                notify("Placed " .. entry.Unit .. " (already there)", ("%s | %s"):format(entry.Loc, fmtMoney(entry.Price)), 4)
+                            end
+                            placeIdx = placeIdx + 1
+                            placeAttempts = 0
+                            placerStatus(placed, #places, upDone, upTotal())
+                        elseif args then
+                            -- fire, then VERIFY the tower actually spawned (lag-proof) before counting
+                            local before = snapshotTowers()
+                            if need then pendingSpend = pendingSpend + need end
+                            local ok, res = pcall(function() return SpawnTower:InvokeServer(unpack(args)) end)
+                            local live = nil
+                            if ok then
+                                if typeof(res) == "Instance" then
+                                    local okM = pcall(function() return res:IsA("Model") end)
+                                    if okM and res:IsA("Model") and isOwnTower(res) then live = res end
+                                end
+                                if not live then live = confirmNewTower(entry.Unit, entry.PX, entry.PY, entry.PZ, before, 3) end
+                            end
+                            if need then pendingSpend = math.max(0, pendingSpend - need) end
+                            if live then
+                                placed = placed + 1
+                                local k = posKey(entry.PX, entry.PY, entry.PZ)
+                                if k then placedByPos[k] = live end
+                                if CfgNotify then
+                                    local priceStr = entry.Price and fmtMoney(entry.Price) or "?"
+                                    notify("Placed " .. entry.Unit, ("%s | %s | %s"):format(entry.Loc, fmtTimePair(expected, actual), priceStr), 4)
+                                end
+                                placeIdx = placeIdx + 1
+                                placeAttempts = 0
+                                placerStatus(placed, #places, upDone, upTotal())
                             else
-                                -- fallback: find the newest own tower of this unit not yet mapped
-                                local folder = Workspace:FindFirstChild("Towers")
-                                if folder then
-                                    for _, m in ipairs(folder:GetChildren()) do
-                                        if m.Name == entry.Unit and isOwnTower(m) then
-                                            local k2 = posKey(entry.PX, entry.PY, entry.PZ)
-                                            if k2 and not placedByPos[k2] then liveTower = m break end
-                                        end
-                                    end
-                                    if not liveTower then
-                                        for _, m in ipairs(folder:GetChildren()) do
-                                            if m.Name == entry.Unit and isOwnTower(m) and not placedByPos[posKey(entry.PX, entry.PY, entry.PZ)] then liveTower = m break end
-                                        end
-                                    end
+                                -- rejected or lag-timed-out: retry, don't advance (advancing = lost units)
+                                placeAttempts = placeAttempts + 1
+                                if placeAttempts >= PLACE_MAX_ATTEMPTS then
+                                    notify("Placer", "Skipped " .. entry.Unit .. " @ " .. entry.Loc .. " (rejected x" .. placeAttempts .. ")", 4)
+                                    placeIdx = placeIdx + 1
+                                    placeAttempts = 0
+                                    placerStatus(placed, #places, upDone, upTotal())
+                                else
+                                    placeNextRetry = os.clock() + 1
                                 end
                             end
-                            if liveTower then
-                                local k = posKey(entry.PX, entry.PY, entry.PZ)
-                                if k then placedByPos[k] = liveTower end
-                            end
+                        else
+                            -- unreplayable entry (bad args): skip
+                            placeIdx = placeIdx + 1
+                            placerStatus(placed, #places, upDone, upTotal())
                         end
-                        if CfgNotify and success then
-                            local priceStr = entry.Price and fmtMoney(entry.Price) or "?"
-                            notify("Placed " .. entry.Unit, ("%s | %s | %s"):format(entry.Loc, fmtTimePair(expected, actual), priceStr), 4)
-                        end
-                        placeIdx = placeIdx + 1
-                        placerStatus(placed, #places, upDone, upTotal())
                     end
                 end
                 if doUpgrades then
@@ -1186,37 +1222,39 @@ AutoPlaceToggle = PlacerTab:Toggle({
                 task.wait(0.15)
             end
             AutoPlacing = false
+            PlacerRunning = false
             placerStatus(placed, #places, upDone, upTotal())
             persistPlacer()
             local msg = "Finished: placed " .. placed .. "/" .. #places
             if doUpgrades then msg = msg .. ", upgraded " .. upDone .. "/" .. #upgrades end
             notify("Placer", msg .. ".")
         end)
-    end,
+    end
+AutoPlaceToggle = PlacerTab:Toggle({
+    Title = "Auto Place",
+    Desc = "Places units from the file when game time >= recorded time.",
+    Value = AutoPlacing,
+    Callback = onAutoPlace,
 })
--- Auto Place saved as ON should run when loaded — WindUI doesn't fire Callback on initial Value.
--- Root causes fixed: (1) this runs after AutoPlaceToggle exists; (2) no caller clears AutoPlacing;
--- (3) kick happens even if SelectedFile arrives late via await.
-if AutoPlacing and AutoPlaceToggle then
+-- Saved-ON toggles: WindUI shows Value=true but never fires Callback on load,
+-- so invoke the behaviors directly instead of hoping Toggle:Set() fires.
+-- Other toggles are plain flags already restored from Settings above; Auto Speed
+-- gets its one-shot side effect re-applied here.
+if CfgAutoSpeed then pcall(function() setGameSpeed(CfgSpeedValue) end) end
+if AutoPlacing and SelectedFile then
     task.spawn(function()
-        -- wait for file selection (may replicate late after teleport)
-        local waited = 0
-        while not SelectedFile and waited < 15 do task.wait(1) waited = waited + 1 end
-        if not SelectedFile then
-            notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
-            pcall(function() AutoPlaceToggle:Set(false) end)
-            return
-        end
-        -- keep trying to trigger the Callback until the loop actually starts
         for _ = 1, 6 do
-            pcall(function() AutoPlaceToggle:Set(false) end)
-            task.wait(0.5)
-            pcall(function() AutoPlaceToggle:Set(true) end)
-            task.wait(1.5)
-            -- if loop started, AutoPlacing stays true and placerStatus shows ON — stop kicking
-            if AutoPlacing then break end
+            if PlacerRunning then break end
+            onAutoPlace(true)
+            task.wait(2)
+            if PlacerRunning then break end
+        end
+        if not PlacerRunning then
+            notify("Placer", "Auto Place was ON but the loop did not start — toggle it manually.", 5)
         end
     end)
+elseif AutoPlacing and not SelectedFile then
+    notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
 local HUB_VERSION = "2026-09-25 01:14 UTC — EndScreen.Replay pinned (e028f17)"
