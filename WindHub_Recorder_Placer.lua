@@ -1262,8 +1262,9 @@ local function onAutoPlace(state)
                 if not AutoPlacing then break end
                 task.wait(0.15)
             end
-            AutoPlacing = false
             PlacerRunning = false
+            -- do NOT set AutoPlacing=false here: that persisted OFF and killed next-game auto place.
+            -- The run is done; the toggle stays armed (saved ON) for the next match.
             placerStatus(placed, #places, upDone, upTotal())
             persistPlacer()
             local msg = "Finished: placed " .. placed .. "/" .. #places
@@ -1298,6 +1299,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-25 23:15 UTC"
+local HUB_VERSION = "2026-09-25 23:28 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
