@@ -63,6 +63,7 @@ end
 local Functions = ReplicatedStorage:WaitForChild("Functions", 10)
 local SpawnTower = Functions and Functions:WaitForChild("SpawnTower", 10)
 local UpgradeTowerRemote = Functions and Functions:WaitForChild("UpgradeTower", 10)
+local SellTowerRemote = Functions and Functions:WaitForChild("SellTower", 10)
 local ChangeTowerModeRemote = Functions and Functions:WaitForChild("ChangeTowerMode", 10)
 
 local TimerFn
@@ -204,7 +205,7 @@ local function saveSettings(data)
 end
 local SelectedFile; local AutoPlacing; local CfgAutoUpgrade; local CfgNotify; local CfgIgnoreTime; local CfgAutoRetry; local PlacerDropdown; local AutoPlaceToggle
 local CfgAutoSpeed; local CfgSpeedValue
-local CfgAutoSkill; local CfgAutoMut; local CfgMut1; local CfgMut2; local CfgMut3
+local CfgAutoSkill; local CfgAutoMut; local CfgMut1; local CfgMut2; local CfgMut3; local CfgSpamAbility
 local getReplayButton; local clickReplayButton; local mutSync; local ensureMutListener; local ensureAntiMacro
 local _settings = loadSettings()
 SelectedFile = _settings.SelectedFile
@@ -216,6 +217,7 @@ CfgAutoRetry = _settings.AutoRetry == true
 CfgAutoSpeed = _settings.AutoSpeed == true
 CfgSpeedValue = tonumber(_settings.SpeedValue) or 5
 CfgAutoSkill = _settings.AutoSkill == true
+CfgSpamAbility = _settings.SpamAbility == true
 CfgAutoMut = _settings.AutoMut == true
 CfgMut1 = _settings.Mut1 or "Gigantism"
 CfgMut2 = _settings.Mut2 or "Regeneration"
@@ -234,6 +236,7 @@ local function persistPlacer()
         AutoSpeed = CfgAutoSpeed,
         SpeedValue = CfgSpeedValue,
         AutoSkill = CfgAutoSkill,
+        SpamAbility = CfgSpamAbility,
         AutoMut = CfgAutoMut,
         Mut1 = CfgMut1,
         Mut2 = CfgMut2,
@@ -353,6 +356,7 @@ end
 -- observer-only helpers — forward declared for placement observer
 local isOwnTower; local getTowerPos; local getTowerLVL
 local SeenTowers = {}
+local SuppressRecordUntil = 0 -- spam-ability replaces hide here so they don't flood recordings
 local function getTowerTrait(tower)
     local ok, v = pcall(function() return tower:GetAttribute("TraitName") end)
     if ok and v and tostring(v) ~= "" then return tostring(v) end
@@ -368,6 +372,7 @@ end
 local function recordPlacementObserved(tower, isRetry)
     if not Recording then return end
     if SeenTowers[tower] then return end
+    if os.clock() < SuppressRecordUntil then return end -- own spam-ability replace, don't record
     if not isOwnTower(tower) then
         if not isRetry and tower.Parent == Workspace:FindFirstChild("Towers") then
             task.delay(0.9, function() recordPlacementObserved(tower, true) end)
@@ -634,6 +639,12 @@ MainTab:Toggle({
     Desc = "Auto uses hero skills (ActivateAbility) when off cooldown. Uses Drakobloxxer etc.",
     Value = CfgAutoSkill,
     Callback = function(state) CfgAutoSkill = (state == true) persistPlacer() notify("Main", "Auto Skill " .. (CfgAutoSkill and "ON" or "OFF")) end,
+})
+MainTab:Toggle({
+    Title = "Spam Ability [Bypass]",
+    Desc = "Skill -> sell -> replace fresh (cooldown reset) -> skill again. Server-confirmed each step.",
+    Value = CfgSpamAbility,
+    Callback = function(state) CfgSpamAbility = (state == true) persistPlacer() notify("Main", "Spam Ability " .. (CfgSpamAbility and "ON" or "OFF")) end,
 })
 MainTab:Toggle({
     Title = "Auto Choose Mutations",
@@ -1303,6 +1314,104 @@ local function onAutoPlace(state)
             notify("Placer", msg .. ".")
         end)
     end
+-- Spam Ability [Bypass] engine: skill -> sell -> replace fresh -> skill again.
+-- Every step confirmed via server->client truth (cooldown active / removed /
+-- spawned). No hooks. Own replaces are hidden from the recorder.
+local function spamAbilityCycle(m)
+    local GetCD = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("GetAbilityCooldown")
+    local Activate = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("ActivateAbility")
+    if not Activate then return end
+    local function alive(t) return t ~= nil and t.Parent ~= nil and isOwnTower(t) end
+    if not alive(m) then return end
+    -- 1. fire skill
+    local okA = pcall(function() Activate:FireServer(m) end)
+    if not okA then return end
+    -- 2. confirm skill went on cooldown (server truth) — else don't sell
+    if GetCD then
+        local fired, t0 = false, os.clock()
+        while os.clock() - t0 < 1.2 do
+            if not CfgSpamAbility or not alive(m) then return end
+            local ok, cd = pcall(function() return GetCD:InvokeServer(m) end)
+            if ok and tonumber(cd) ~= nil and tonumber(cd) > 0.2 then fired = true break end
+            task.wait(0.1)
+        end
+        if not fired then return end
+    end
+    -- 3. snapshot replace data BEFORE sell
+    local unit = tostring(m.Name)
+    local pv = getTowerPos(m)
+    if not pv then return end
+    local price = readTowerPrice(m)
+    local trait = getTowerTrait(m)
+    local skin = getTowerSkin(unit, trait)
+    local traits = trait and {trait} or {}
+    local need = tonumber(price)
+    if need then
+        local have = getCash()
+        if have ~= nil and (have + math.floor(need / 5)) < need then return end -- wait for cash next round
+    end
+    -- 4. sell + confirm removed
+    if not SellTowerRemote then return end
+    local sold = false
+    do
+        local okS = pcall(function() return SellTowerRemote:InvokeServer(m) end)
+        if okS then
+            local t0 = os.clock()
+            while os.clock() - t0 < 2 do
+                if not CfgSpamAbility then return end
+                if not m.Parent then sold = true break end
+                task.wait(0.1)
+            end
+        end
+    end
+    if not sold then return end -- don't place a duplicate
+    if not CfgSpamAbility then return end
+    -- 5. replace fresh + confirm spawned
+    SuppressRecordUntil = os.clock() + 3
+    local before = snapshotTowers()
+    local okP, res = pcall(function() return SpawnTower:InvokeServer(unit, CFrame.new(pv), false, skin, traits) end)
+    local fresh = nil
+    if okP and typeof(res) == "Instance" then
+        local okM = pcall(function() return res:IsA("Model") end)
+        if okM and res:IsA("Model") and isOwnTower(res) then fresh = res end
+    end
+    if not fresh then
+        local t0 = os.clock()
+        while os.clock() - t0 < 3 do
+            if not CfgSpamAbility then return end
+            fresh = confirmNewTower(unit, pv.X, pv.Y, pv.Z, before, 0.3)
+            if fresh then break end
+            task.wait(0.15)
+        end
+    end
+    if not fresh or not alive(fresh) then return end
+    -- 6. fire skill on the fresh tower (cooldown was reset by replace)
+    pcall(function() Activate:FireServer(fresh) end)
+end
+task.spawn(function()
+    while true do
+        task.wait(0.25)
+        if CfgSpamAbility then
+            local folder = Workspace:FindFirstChild("Towers")
+            if folder then
+                for _, m in ipairs(folder:GetChildren()) do
+                    if not CfgSpamAbility then break end
+                    if isOwnTower(m) then
+                        local abilityName = nil
+                        pcall(function()
+                            local cfg = m:FindFirstChild("Config")
+                            local ab = cfg and cfg:FindFirstChild("Ability")
+                            if ab and tostring(ab.Value) ~= "" then abilityName = tostring(ab.Value) end
+                        end)
+                        if abilityName then
+                            pcall(function() spamAbilityCycle(m) end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
 AutoPlaceToggle = PlacerTab:Toggle({
     Title = "Auto Place",
     Desc = "Places units from the file when game time >= recorded time.",
@@ -1330,6 +1439,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 01:12 UTC"
+local HUB_VERSION = "2026-09-26 01:24 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
