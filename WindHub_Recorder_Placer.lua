@@ -369,6 +369,26 @@ local function getTowerSkin(unit, trait)
     if trait and trait ~= "" then return unit .. " " .. trait end
     return unit
 end
+
+-- skill ready? game's own gate (AbilityBar activate): AbilityReady ~= false,
+-- plus GetAbilityCooldown semantics per Cobalt: (readyBool, remainingSecs)
+local function abilityReady(m)
+    local blocked = false
+    pcall(function()
+        if m:GetAttribute("AbilityReady") == false then blocked = true end
+    end)
+    if blocked then return false end
+    local GetCD = ReplicatedStorage:FindFirstChild("Functions") and ReplicatedStorage.Functions:FindFirstChild("GetAbilityCooldown")
+    if GetCD then
+        local ok, a, b = pcall(function() return GetCD:InvokeServer(m) end)
+        if ok then
+            if a == false then return false end
+            if tonumber(a) ~= nil then return tonumber(a) <= 0.2 end
+            if tonumber(b) ~= nil then return tonumber(b) <= 0.2 end
+        end
+    end
+    return true
+end
 local function recordPlacementObserved(tower, isRetry)
     if not Recording then return end
     if SeenTowers[tower] then return end
@@ -737,14 +757,7 @@ task.spawn(function()
                             if ab and tostring(ab.Value) ~= "" then abilityName = tostring(ab.Value) end
                         end)
                         if abilityName then
-                            local ready = false
-                            if GetCD then
-                                local ok, cd = pcall(function() return GetCD:InvokeServer(m) end)
-                                -- invoke failed or non-number: unknown, skip (don't assume ready)
-                                if ok and tonumber(cd) ~= nil then ready = tonumber(cd) <= 0.2 end
-                            else
-                                ready = true -- no cooldown remote: fire blind like before
-                            end
+                            local ready = abilityReady(m)
                             if ready then
                                 local now = os.clock()
                                 if (now - (lastSkillFire[m] or 0)) >= 1 then
@@ -1336,23 +1349,32 @@ local function spamAbilityCycle(m)
     local function alive(t) return t ~= nil and t.Parent ~= nil and isOwnTower(t) end
     if not alive(m) then return end
     local unit = tostring(m.Name)
-    -- 1. skill ready? check BEFORE firing (some abilities never report cooldown after, so no post-fire gate)
-    if GetCD then
-        local ok, cd = pcall(function() return GetCD:InvokeServer(m) end)
-        if not (ok and tonumber(cd) ~= nil and tonumber(cd) <= 0.2) then
-            spamStatus("cooldown not ready: " .. unit)
+    -- 1. skill ready? game's own gate (AbilityReady) + cooldown semantics (readyBool, remaining)
+    local wasReady = abilityReady(m)
+    if wasReady then
+        -- 2. fire, then confirm it took effect (attr flips false) before risking cash
+        local okA, errA = pcall(function() Activate:FireServer(m) end)
+        if not okA then
+            spamStatus("activate error: " .. tostring(errA):sub(1, 60))
             return
         end
+        local tookEffect, t0 = false, os.clock()
+        while os.clock() - t0 < 1.5 do
+            if not CfgSpamAbility or not alive(m) then return end
+            local okR, readyNow = pcall(abilityReady, m)
+            if okR and not readyNow then tookEffect = true break end
+            task.wait(0.15)
+        end
+        if not tookEffect then
+            spamStatus("fire had no effect: " .. unit)
+            return
+        end
+        SpamStats.skills = SpamStats.skills + 1
+        spamStatus("skill fired, selling " .. unit)
+    else
+        -- arrived on cooldown: a previous fire took effect, so resetting still progresses
+        spamStatus("resetting cooldown: " .. unit)
     end
-    -- 2. fire skill (errors shown, not swallowed)
-    local okA, errA = pcall(function() Activate:FireServer(m) end)
-    if not okA then
-        spamStatus("activate error: " .. tostring(errA):sub(1, 60))
-        return
-    end
-    task.wait(0.4) -- let server apply; no cooldown-shape assumption afterward
-    if not CfgSpamAbility or not alive(m) then return end
-    SpamStats.skills = SpamStats.skills + 1
     -- 3. snapshot replace data BEFORE sell
     local pv = getTowerPos(m)
     if not pv then spamStatus("no pivot: " .. unit) return end
@@ -1481,6 +1503,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 01:43 UTC"
+local HUB_VERSION = "2026-09-26 01:49 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
