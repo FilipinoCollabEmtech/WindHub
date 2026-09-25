@@ -206,6 +206,7 @@ end
 local SelectedFile; local AutoPlacing; local CfgAutoUpgrade; local CfgNotify; local CfgIgnoreTime; local CfgAutoRetry; local PlacerDropdown; local AutoPlaceToggle
 local CfgAutoSpeed; local CfgSpeedValue
 local CfgAutoSkill; local CfgAutoMut; local CfgMut1; local CfgMut2; local CfgMut3; local CfgSpamAbility
+local MutDrop1; local MutDrop2; local MutDrop3; local mutChoiceSet
 local getReplayButton; local clickReplayButton; local mutSync; local ensureMutListener; local ensureAntiMacro
 local _settings = loadSettings()
 SelectedFile = _settings.SelectedFile
@@ -681,22 +682,25 @@ MainTab:Toggle({
     Value = CfgAutoMut,
     Callback = function(state) CfgAutoMut = (state == true) persistPlacer() if state and type(mutSync) == "function" then mutSync() end notify("Main", "Auto Mutations " .. (CfgAutoMut and "ON" or "OFF")) end,
 })
-local MUT_CHOICES = {"Gigantism","Regeneration","BossRush","Blackout","Invasion","None","Speedy","Rapid","Tank","Heavy","Giant","Regenerating","Elite","Mini Boss","Berserker","Random"}
-MainTab:Dropdown({
+-- full Slop mutator Ids per MUTATOR_ORDER (DailySlopR...): Gigantism, Speedrun, Brainrot,
+-- ArmoredSlop, Regeneration, BossRush, TinySlop + Blackout/Invasion/None. Server-sent
+-- newcomers auto-append below AND refresh the dropdown UI.
+local MUT_CHOICES = {"Gigantism","Speedrun","Brainrot","ArmoredSlop","Regeneration","BossRush","TinySlop","Blackout","Invasion","None"}
+MutDrop1 = MainTab:Dropdown({
     Title = "Mutation Choice 1",
     Desc = "First pick — if offered, votes it.",
     Values = MUT_CHOICES,
     Value = CfgMut1,
     Callback = function(opt) if type(opt)=="table" then opt=opt[1] end CfgMut1=tostring(opt) persistPlacer() end,
 })
-MainTab:Dropdown({
+MutDrop2 = MainTab:Dropdown({
     Title = "Mutation Choice 2",
     Desc = "Second pick — if 1 not offered but 2 is, votes 2.",
     Values = MUT_CHOICES,
     Value = CfgMut2,
     Callback = function(opt) if type(opt)=="table" then opt=opt[1] end CfgMut2=tostring(opt) persistPlacer() end,
 })
-MainTab:Dropdown({
+MutDrop3 = MainTab:Dropdown({
     Title = "Mutation Choice 3",
     Desc = "Third pick — if 1/2 not offered but 3 is, votes 3. If none, skips.",
     Values = MUT_CHOICES,
@@ -782,6 +786,8 @@ local lastVotedMut = nil
 local lastVotedMutAt = 0
 local mutOfferedSig = ""
 local mutListenerOk = false
+mutChoiceSet = {}
+for _, v in ipairs(MUT_CHOICES) do mutChoiceSet[v:lower()] = true end
 ensureMutListener = function()
     if mutListenerOk then return true end
     local ok, sm = pcall(function()
@@ -795,6 +801,15 @@ ensureMutListener = function()
                 for _, entry in ipairs(payload) do
                     local id = tostring((type(entry) == "table" and (entry.Id or entry.id)) or "")
                     if id ~= "" then table.insert(ids, id) table.insert(sig, id) end
+                end
+                for _, id in ipairs(ids) do
+                    if not mutChoiceSet[id:lower()] then
+                        mutChoiceSet[id:lower()] = true
+                        table.insert(MUT_CHOICES, id)
+                        pcall(function() if MutDrop1 then MutDrop1:Refresh(MUT_CHOICES) end end)
+                        pcall(function() if MutDrop2 then MutDrop2:Refresh(MUT_CHOICES) end end)
+                        pcall(function() if MutDrop3 then MutDrop3:Refresh(MUT_CHOICES) end end)
+                    end
                 end
                 local newSig = table.concat(sig, "|")
                 if newSig ~= "" and newSig ~= mutOfferedSig then
@@ -1503,6 +1518,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 01:49 UTC"
+local HUB_VERSION = "2026-09-26 02:12 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
