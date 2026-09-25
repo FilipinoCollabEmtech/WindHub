@@ -1158,11 +1158,15 @@ PlacerTab:Toggle({
     Callback = function(state) CfgIgnoreTime = (state == true) ;persistPlacer() end,
 })
 local PlacerRunning = false
+-- shared cash reservation (idea 1): placer publishes what it will spend next,
+-- spam reserves its rebuy; neither strands the other
+local placerNextNeed = 0
+local spamReserved = 0
 local function onAutoPlace(state)
     if state and PlacerRunning then AutoPlacing = true return end
     AutoPlacing = state and true or false
     persistPlacer()
-    if not AutoPlacing then placerStatus() ;return end
+    if not AutoPlacing then placerNextNeed = 0 placerStatus() ;return end
         if not SelectedFile then notify("Placer", "Select a recorded file first.", 4) ;AutoPlacing = false persistPlacer() return end
         if not SpawnTower then notify("Placer", "SpawnTower remote not found.", 5) ;AutoPlacing = false persistPlacer() return end
         task.spawn(function()
@@ -1210,13 +1214,25 @@ local function onAutoPlace(state)
             placerStatus(placed, #places, upDone, upTotal())
             PlacerRunning = true
             while AutoPlacing and (placeIdx <= #places or (doUpgrades and upDone < #upgrades)) do
+                -- publish next spend for spam's reserve check (idea 1)
+                placerNextNeed = 0
+                if placeIdx <= #places then placerNextNeed = placerNextNeed + (tonumber(places[placeIdx].Price) or 0) end
+                if doUpgrades then
+                    for _ui, _ue in ipairs(upgrades) do
+                        local _us = upState[_ui]
+                        if not _us.done and timeReady(_ue) then
+                            placerNextNeed = placerNextNeed + (tonumber(_ue.Price) or 0)
+                            break
+                        end
+                    end
+                end
                 if placeIdx <= #places and os.clock() >= placeNextRetry and timeReady(places[placeIdx]) then
                     local entry = places[placeIdx]
                     local need = tonumber(entry.Price)
                     local have = getCash()
-                    -- calculate ahead: cash already committed to in-flight placements (lag) counts too,
-                    -- so "can I buy 2-3 more or just 1" is answered against real balance, not stale display
-                    local effHave = (have ~= nil) and (have - pendingSpend) or nil
+                    -- calculate ahead: cash committed to in-flight placements (lag) AND spam's
+                    -- reserved rebuy both count, so it's answered against real balance, not stale display
+                    local effHave = (have ~= nil) and (have - pendingSpend - spamReserved) or nil
                     if need and effHave ~= nil and effHave < need then
                         setParagraph(PlacerInfo, "Auto Place: ON (waiting cash)", ("Need %s have %s for %s @ %s — waiting..."):format(fmtMoney(need), fmtMoney(effHave), entry.Unit, entry.Loc))
                         placeNextRetry = os.clock() + 0.6
@@ -1307,7 +1323,8 @@ local function onAutoPlace(state)
                             else
                                 local needUp = tonumber(entry.Price)
                                 local haveUp = getCash()
-                                if needUp and haveUp ~= nil and haveUp < needUp then st.nextRetry = now + 0.6
+                                local effUp = (haveUp ~= nil) and (haveUp - pendingSpend - spamReserved) or nil
+                                if needUp and effUp ~= nil and effUp < needUp then st.nextRetry = now + 0.6
                                 else
                                     local live = findLiveTowerForUpgrade(entry)
                                     if not live then
@@ -1342,6 +1359,7 @@ local function onAutoPlace(state)
                 task.wait(0.15)
             end
             PlacerRunning = false
+            placerNextNeed = 0
             -- do NOT set AutoPlacing=false here: that persisted OFF and killed next-game auto place.
             -- The run is done; the toggle stays armed (saved ON) for the next match.
             placerStatus(placed, #places, upDone, upTotal())
@@ -1400,10 +1418,14 @@ local function spamAbilityCycle(m)
     local need = tonumber(price)
     if need then
         local have = getCash()
-        if have ~= nil and (have + math.floor(need / 5)) < need then
-            spamStatus(("waiting cash %s/%s: %s"):format(fmtMoney(have), fmtMoney(need), unit))
+        local refund = math.floor(need / 5)
+        -- reserve-aware (idea 1): keep own rebuy AND the placer's next action funded,
+        -- otherwise the placer (faster) eats the rebuy cash and the tower is lost
+        if have ~= nil and ((have + refund) < need or (have + refund - need) < placerNextNeed) then
+            spamStatus(("waiting cash %s/%s (+placer %s): %s"):format(fmtMoney(have), fmtMoney(need), fmtMoney(placerNextNeed), unit))
             return
         end
+        spamReserved = need
     end
     spamStatus("skill fired, selling " .. unit)
     -- 4. sell + confirm removed (essential: never duplicate)
@@ -1413,7 +1435,7 @@ local function spamAbilityCycle(m)
         if okS then
             local t0 = os.clock()
             while os.clock() - t0 < 2 do
-                if not CfgSpamAbility then return end
+                if not CfgSpamAbility then spamReserved = 0 return end
                 if not m.Parent then sold = true break end
                 task.wait(0.1)
             end
@@ -1422,12 +1444,13 @@ local function spamAbilityCycle(m)
         end
     end
     if not sold then
+        spamReserved = 0
         SpamStats.failed = SpamStats.failed + 1
         spamStatus("sell failed, skipped")
         notify("Main", "Spam Ability: sell failed — skipped (no duplicate placed)", 4)
         return
     end
-    if not CfgSpamAbility then return end
+    if not CfgSpamAbility then spamReserved = 0 return end
     -- 5. replace fresh + confirm spawned
     SuppressRecordUntil = os.clock() + 3
     local before = snapshotTowers()
@@ -1440,13 +1463,14 @@ local function spamAbilityCycle(m)
     if not fresh then
         local t0 = os.clock()
         while os.clock() - t0 < 3 do
-            if not CfgSpamAbility then return end
+            if not CfgSpamAbility then spamReserved = 0 return end
             fresh = confirmNewTower(unit, pv.X, pv.Y, pv.Z, before, 0.3)
             if fresh then break end
             task.wait(0.15)
         end
     end
     if not fresh or not alive(fresh) then
+        spamReserved = 0
         SpamStats.failed = SpamStats.failed + 1
         spamStatus("replace FAILED (tower lost)")
         notify("Main", "Spam Ability: LOST " .. unit .. " (sold, replace failed)", 5)
@@ -1454,6 +1478,7 @@ local function spamAbilityCycle(m)
     end
     -- 6. fire skill on the fresh tower (cooldown reset by replace)
     pcall(function() Activate:FireServer(fresh) end)
+    spamReserved = 0
     SpamStats.replaced = SpamStats.replaced + 1
     spamStatus("replaced + fired: " .. unit)
 end
@@ -1518,6 +1543,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 02:12 UTC"
+local HUB_VERSION = "2026-09-26 02:20 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
