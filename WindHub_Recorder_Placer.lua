@@ -694,7 +694,9 @@ task.spawn(function()
         end
     end
 end)
--- Auto Skill loop — observer-only, uses ActivateAbility per tower
+-- Auto Skill loop — observer-only. Skill existence uses the game's own check
+-- (AbilityBar myAbilityTowers): tower.Config.Ability must exist (no require).
+local lastSkillFire = setmetatable({}, {__mode = "k"}) -- weak keys: no leak on sell
 task.spawn(function()
     while true do
         task.wait(0.7)
@@ -707,20 +709,32 @@ task.spawn(function()
             if folder then
                 for _, m in ipairs(folder:GetChildren()) do
                     if isOwnTower(m) then
-                        local canUse = true
-                        if GetCD then
-                            local ok, cd = pcall(function() return GetCD:InvokeServer(m) end)
-                            if ok and tonumber(cd) and tonumber(cd) > 0.2 then canUse = false end
-                        end
-                        if canUse then
-                            pcall(function() Activate:FireServer(m) end)
-                            -- also ensure AbilityAuto is on for this hero (e.g. B01 50 R3TR0 true)
-                            if AbilityAuto then
-                                pcall(function()
-                                    -- try to enable auto for this tower's ability if needed
-                                    local id = m:GetAttribute("ID") or m.Name
-                                    AbilityAuto:FireServer(tostring(id), true)
-                                end)
+                        -- a skill exists only if Config.Ability is present
+                        local abilityName = nil
+                        pcall(function()
+                            local cfg = m:FindFirstChild("Config")
+                            local ab = cfg and cfg:FindFirstChild("Ability")
+                            if ab and tostring(ab.Value) ~= "" then abilityName = tostring(ab.Value) end
+                        end)
+                        if abilityName then
+                            local ready = false
+                            if GetCD then
+                                local ok, cd = pcall(function() return GetCD:InvokeServer(m) end)
+                                -- invoke failed or non-number: unknown, skip (don't assume ready)
+                                if ok and tonumber(cd) ~= nil then ready = tonumber(cd) <= 0.2 end
+                            else
+                                ready = true -- no cooldown remote: fire blind like before
+                            end
+                            if ready then
+                                local now = os.clock()
+                                if (now - (lastSkillFire[m] or 0)) >= 1 then
+                                    lastSkillFire[m] = now
+                                    pcall(function() Activate:FireServer(m) end)
+                                    -- keep AbilityAuto on for this ability (e.g. B01 50 R3TR0, true)
+                                    if AbilityAuto then
+                                        pcall(function() AbilityAuto:FireServer(abilityName, true) end)
+                                    end
+                                end
                             end
                         end
                     end
@@ -1316,6 +1330,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 01:07 UTC"
+local HUB_VERSION = "2026-09-26 01:12 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
