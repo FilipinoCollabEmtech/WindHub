@@ -1539,8 +1539,11 @@ local function spamAbilityCycle(m)
     local function alive(t) return t ~= nil and t.Parent ~= nil and isOwnTower(t) end
     if not alive(m) then return end
     local unit = tostring(m.Name)
-    -- 1. skill ready? game's own gate (AbilityReady) + cooldown semantics (readyBool, remaining)
-    local wasReady = abilityReady(m)
+    -- 1. skill ready? attribute-only (zero remotes) — game's own gate
+    local wasReady = true
+    pcall(function()
+        if m:GetAttribute("AbilityReady") == false then wasReady = false end
+    end)
     if wasReady then
         -- 2. fire, then confirm it took effect (attr flips false) before risking cash
         local okA, errA = pcall(function() Activate:FireServer(m) end)
@@ -1549,11 +1552,11 @@ local function spamAbilityCycle(m)
             return
         end
         local tookEffect, t0 = false, os.clock()
-        while os.clock() - t0 < 1.5 do
+        while os.clock() - t0 < 1.0 do
             if not CfgSpamAbility or not alive(m) then return end
-            local okR, readyNow = pcall(abilityReady, m)
-            if okR and not readyNow then tookEffect = true break end
-            task.wait(0.15)
+            local okR, attr = pcall(function() return m:GetAttribute("AbilityReady") end)
+            if okR and attr == false then tookEffect = true break end
+            task.wait(0.1)
         end
         if not tookEffect then
             spamStatus("fire had no effect: " .. unit)
@@ -1591,8 +1594,8 @@ local function spamAbilityCycle(m)
         local okS, errS = pcall(function() return SellRemote:InvokeServer(m) end)
         if okS then
             local t0 = os.clock()
-            while os.clock() - t0 < 2 do
-                if not CfgSpamAbility then spamReserved = 0 return end
+            while os.clock() - t0 < 1.2 do
+                if not CfgSpamAbility then return end
                 if not m.Parent then sold = true break end
                 task.wait(0.1)
             end
@@ -1623,7 +1626,7 @@ local function spamAbilityCycle(m)
             if not CfgSpamAbility then spamReserved = 0 return end
             fresh = confirmNewTower(unit, pv.X, pv.Y, pv.Z, before, 0.3)
             if fresh then break end
-            task.wait(0.15)
+            task.wait(0.1)
         end
     end
     if not fresh or not alive(fresh) then
@@ -1703,6 +1706,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 19:12 UTC"
+local HUB_VERSION = "2026-09-26 19:27 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
