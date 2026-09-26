@@ -206,6 +206,7 @@ end
 local SelectedFile; local AutoPlacing; local CfgAutoUpgrade; local CfgNotify; local CfgIgnoreTime; local CfgAutoRetry; local PlacerDropdown; local AutoPlaceToggle
 local CfgAutoSpeed; local CfgSpeedValue
 local CfgAutoSkill; local CfgAutoMut; local CfgMut1; local CfgMut2; local CfgMut3; local CfgSpamAbility
+local CfgSpinNotify; local CfgAutoSpin; local CfgSpinType; local CfgSpinCurrency; local CfgSpinRarity; local CfgSpinTier
 local MutDrop1; local MutDrop2; local MutDrop3; local mutChoiceSet
 local getReplayButton; local clickReplayButton; local mutSync; local ensureMutListener; local ensureAntiMacro
 local _settings = loadSettings()
@@ -218,6 +219,12 @@ CfgAutoRetry = _settings.AutoRetry == true
 CfgAutoSpeed = _settings.AutoSpeed == true
 CfgSpeedValue = tonumber(_settings.SpeedValue) or 5
 CfgAutoSkill = _settings.AutoSkill == true
+CfgSpinNotify = _settings.SpinNotify == true
+CfgAutoSpin = _settings.AutoSpin == true
+CfgSpinType = _settings.SpinType or "Basic"
+CfgSpinCurrency = _settings.SpinCurrency or "Cash"
+CfgSpinRarity = _settings.SpinRarity or "Secret"
+CfgSpinTier = _settings.SpinTier or "Any"
 CfgSpamAbility = _settings.SpamAbility == true
 CfgAutoMut = _settings.AutoMut == true
 CfgMut1 = _settings.Mut1 or "Gigantism"
@@ -238,6 +245,12 @@ local function persistPlacer()
         SpeedValue = CfgSpeedValue,
         AutoSkill = CfgAutoSkill,
         SpamAbility = CfgSpamAbility,
+        SpinNotify = CfgSpinNotify,
+        AutoSpin = CfgAutoSpin,
+        SpinType = CfgSpinType,
+        SpinCurrency = CfgSpinCurrency,
+        SpinRarity = CfgSpinRarity,
+        SpinTier = CfgSpinTier,
         AutoMut = CfgAutoMut,
         Mut1 = CfgMut1,
         Mut2 = CfgMut2,
@@ -938,6 +951,142 @@ end)
 
 local RecorderTab = Window:Tab({ Title = "Recorder", Icon = "mic" })
 local PlacerTab = Window:Tab({ Title = "Placer", Icon = "play" })
+local SpinTab = Window:Tab({ Title = "Spin", Icon = "dices" })
+-- rarities from dumps (TowersConfig + reward tiers); tiers = shiny tiers (TraitName/Silver/Gold/Rainbow)
+local SPIN_TYPES = {"Basic", "Premium"}
+local SPIN_CURRENCIES = {"Cash", "Gems"}
+local SPIN_RARITIES = {"Any","Common","Uncommon","Rare","Legendary","Mythical","Godly","Secret","Exclusive","Celestial","Hero","Sloppy","Divine","Prismatic","Transcendent"}
+local SPIN_TIERS = {"Any","Normal","Silver","Gold","Rainbow"}
+local SpinInfo = SpinTab:Paragraph({ Title = "Spin: idle", Desc = "Pick type + currency, enable Auto Spin." })
+local SpinRemote, SpinRemoteKind = nil, nil
+local function spinStatus(t)
+    pcall(function() SpinInfo:SetTitle("Spin: " .. t) end)
+end
+local function findSpinRemote()
+    if SpinRemote then return SpinRemote end
+    local ok, r = pcall(function()
+        for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+            local n = string.lower(d.Name)
+            if (d:IsA("RemoteEvent") or d:IsA("RemoteFunction")) and not n:find("admin", 1, true) then
+                if n:find("spin", 1, true) or n:find("summon", 1, true) or n:find("hatch", 1, true) or n:find("roll", 1, true) or n:find("gacha", 1, true) or n:find("wish", 1, true) or n:find("banner", 1, true) or (n:find("crate", 1, true) and n:find("open", 1, true)) then
+                    return d
+                end
+            end
+        end
+        return nil
+    end)
+    if ok and r then
+        SpinRemote, SpinRemoteKind = r, (r:IsA("RemoteFunction") and "Function" or "Event")
+        spinStatus("remote: " .. r:GetFullName() .. " (UNPINNED — send a Cobalt spin capture)")
+    end
+    return SpinRemote
+end
+local function spinTextMatches(...)
+    local strs, shinyFound = {}, false
+    local function collect(v, depth)
+        if depth > 3 then return end
+        if type(v) == "string" then
+            table.insert(strs, v:lower())
+        elseif type(v) == "table" then
+            for _, x in pairs(v) do collect(x, depth + 1) end
+        elseif typeof(v) == "Instance" then
+            table.insert(strs, v.Name:lower())
+            local ok, tr = pcall(function() return v:GetAttribute("TraitName") end)
+            if ok and tr and tostring(tr) ~= "" then table.insert(strs, tostring(tr):lower()) end
+        end
+    end
+    for i = 1, select("#", ...) do collect(select(i, ...), 0) end
+    for _, s in ipairs(strs) do
+        if s == "silver" or s == "gold" or s == "rainbow" or s:find("silver", 1, true) or s:find("gold", 1, true) or s:find("rainbow", 1, true) then shinyFound = true break end
+    end
+    local wantR = tostring(CfgSpinRarity or "Any"):lower()
+    local wantT = tostring(CfgSpinTier or "Any"):lower()
+    local hasR, hasT = (wantR == "any"), (wantT == "any" or (wantT == "normal" and not shinyFound))
+    for _, s in ipairs(strs) do
+        if not hasR and s:find(wantR, 1, true) then hasR = true end
+        if not hasT and wantT ~= "normal" and s:find(wantT, 1, true) then hasT = true end
+    end
+    return (hasR and hasT), strs
+end
+SpinTab:Toggle({
+    Title = "Spin Notifier",
+    Desc = "Notify on spins matching the rarity + tier below.",
+    Value = CfgSpinNotify,
+    Callback = function(state) CfgSpinNotify = (state == true) persistPlacer() end,
+})
+SpinTab:Dropdown({
+    Title = "Spin Type",
+    Desc = "Basic or Premium spins.",
+    Values = SPIN_TYPES,
+    Value = CfgSpinType,
+    Callback = function(opt) if type(opt) == "table" then opt = opt[1] end CfgSpinType = tostring(opt) persistPlacer() end,
+})
+SpinTab:Dropdown({
+    Title = "Currency",
+    Desc = "Spins use Cash or Gems (Diamonds).",
+    Values = SPIN_CURRENCIES,
+    Value = CfgSpinCurrency,
+    Callback = function(opt) if type(opt) == "table" then opt = opt[1] end CfgSpinCurrency = tostring(opt) persistPlacer() end,
+})
+SpinTab:Toggle({
+    Title = "Auto Spin",
+    Desc = "Spins the chosen type automatically (remote unpinned until you send a spin capture).",
+    Value = CfgAutoSpin,
+    Callback = function(state) CfgAutoSpin = (state == true) persistPlacer() notify("Spin", "Auto Spin " .. (CfgAutoSpin and "ON" or "OFF")) end,
+})
+SpinTab:Dropdown({
+    Title = "Notify Rarity",
+    Desc = "Only notify these rarities.",
+    Values = SPIN_RARITIES,
+    Value = CfgSpinRarity,
+    Callback = function(opt) if type(opt) == "table" then opt = opt[1] end CfgSpinRarity = tostring(opt) persistPlacer() end,
+})
+SpinTab:Dropdown({
+    Title = "Notify Tier",
+    Desc = "Shiny tier: Normal = no shiny, else Silver/Gold/Rainbow.",
+    Values = SPIN_TIERS,
+    Value = CfgSpinTier,
+    Callback = function(opt) if type(opt) == "table" then opt = opt[1] end CfgSpinTier = tostring(opt) persistPlacer() end,
+})
+task.spawn(function()
+    while true do
+        task.wait(1.5)
+        if CfgAutoSpin then
+            local r = findSpinRemote()
+            if not r then
+                spinStatus("no spin remote — send Cobalt capture of a spin")
+            else
+                local ok, res
+                if SpinRemoteKind == "Function" then
+                    ok, res = pcall(function() return r:InvokeServer(CfgSpinType) end)
+                else
+                    ok, res = pcall(function() r:FireServer(CfgSpinType) return true end)
+                end
+                if ok then
+                    spinStatus("spun " .. tostring(CfgSpinType) .. " (" .. tostring(CfgSpinCurrency) .. ")")
+                    if CfgSpinNotify and SpinRemoteKind == "Function" then
+                        local match, strs = spinTextMatches(res)
+                        if match then notify("Spin Result", table.concat(strs, ", "):sub(1, 120)) end
+                    end
+                else
+                    spinStatus("spin failed — need exact args (send capture)")
+                end
+            end
+        end
+    end
+end)
+task.spawn(function()
+    while not findSpinRemote() do task.wait(3) end
+    if SpinRemoteKind == "Event" then
+        pcall(function()
+            SpinRemote.OnClientEvent:Connect(function(...)
+                if not CfgSpinNotify then return end
+                local match, strs = spinTextMatches(...)
+                if match then notify("Spin Result", table.concat(strs, ", "):sub(1, 120)) end
+            end)
+        end)
+    end
+end)
 RecorderTab:Input({
     Title = "File Name",
     Desc = "Name of the auto placer file (saved as .json).",
@@ -1485,7 +1634,10 @@ end
 task.spawn(function()
     while true do
         task.wait(0.25)
-        if CfgSpamAbility then
+        if CfgSpamAbility and PlacerRunning then
+            spamStatus("paused (placer running)")
+        end
+        if CfgSpamAbility and not PlacerRunning then
             local folder = Workspace:FindFirstChild("Towers")
             if folder then
                 for _, m in ipairs(folder:GetChildren()) do
@@ -1543,6 +1695,6 @@ elseif AutoPlacing and not SelectedFile then
     notify("Placer", "Auto Place was ON but no file — select one and toggle again.", 4)
 end
 refreshRecorderParagraph()
-local HUB_VERSION = "2026-09-26 02:20 UTC"
+local HUB_VERSION = "2026-09-26 16:08 UTC"
 print("[WindHub] v" .. HUB_VERSION .. " loaded. Files → " .. FOLDER .. "/")
 pcall(function() WindUI:Notify({ Title = "WindHub " .. HUB_VERSION, Content = "Loaded — " .. FOLDER .. "/", Duration = 4 }) end)
