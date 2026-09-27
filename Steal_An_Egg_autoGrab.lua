@@ -787,7 +787,32 @@ task.spawn(function()
                     end
                 end
             end
-            if AutoHitEnabled and (now - lastSwing) >= HIT_COOLDOWN then
+            -- unified equip manager: ONE tool decision per tick (bat/trap equip-fighting meant nothing ever fired)
+            local batToolD = FindMeleeTool()
+            local trapToolD = FindTool("^Trap")
+            local wantKindD = nil
+            do
+                if AutoTrapEnabled and (now - lastTrap) >= TRAP_COOLDOWN and trapToolD ~= nil and records ~= nil then
+                    for _, record in ipairs(records) do
+                        if record.State == "Carried" and record.CarrierUserId and record.CarrierUserId ~= LocalPlayer.UserId then
+                            local pos = EggPosition(record)
+                            if pos and (pos - root.Position).Magnitude <= TRAP_RANGE then wantKindD = "trap" break end
+                        end
+                    end
+                    if not wantKindD and NearestStealer(records, TRAP_RANGE) then wantKindD = "trap" end
+                end
+                if not wantKindD and AutoHitEnabled and (now - lastSwing) >= HIT_COOLDOWN and batToolD then
+                    local rr = MeleeRange(batToolD) or HIT_RANGE
+                    if NearestEnemy(rr) then wantKindD = "bat" end
+                end
+                if AutoHitEnabled and (now - lastSwing) >= HIT_COOLDOWN and not batToolD then
+                    lastHitText = "no melee tool (Bat/Axe/Katana/Staff)"
+                end
+                if AutoTrapEnabled and (now - lastTrap) >= TRAP_COOLDOWN and not trapToolD then
+                    trapState = "no Trap tool"
+                end
+            end
+            if wantKindD == "bat" then
                 local bat, equipped = FindMeleeTool()
                 if not bat then
                     lastHitText = "no melee tool (Bat/Axe/Katana/Staff)"
@@ -819,7 +844,7 @@ task.spawn(function()
                     end
                 end
             end
-            if AutoTrapEnabled and (now - lastTrap) >= TRAP_COOLDOWN and records then
+            if wantKindD == "trap" and records then
                 local trapTool, equipped = FindTool("^Trap")
                 if not trapTool then
                     trapState = "no Trap tool"
@@ -863,9 +888,18 @@ task.spawn(function()
                         local toolTrig = NetRemote("RE/ToolTrigger/Trigger")
                         local askPlace = NetRemote("RE/TrapPlacement/AskPlace")
                         if toolTrig and askPlace then
+                            -- traps sit on the ground: raycast down from the aim point
+                            local ground = aimPos
+                            pcall(function()
+                                local rp = RaycastParams.new()
+                                rp.FilterType = Enum.RaycastFilterType.Exclude
+                                rp.FilterDescendantsInstances = { LocalPlayer.Character }
+                                local res = workspace:Raycast(aimPos + Vector3.new(0, 5, 0), Vector3.new(0, -60, 0), rp)
+                                if res and res.Position then ground = res.Position end
+                            end)
                             pcall(function() toolTrig:FireServer(trapTool) end)
                             pcall(function()
-                                askPlace:FireServer("Trap", Vector3.new(aimPos.X, aimPos.Y, aimPos.Z))
+                                askPlace:FireServer("Trap", Vector3.new(ground.X, ground.Y, ground.Z))
                             end)
                             lastTrap = os.clock()
                             table.insert(pendingTraps, { mode = (victimKind == "carrier") and "egg" or "freeze", uid = eggUid, player = victim, pname = victim.Name, t0 = os.clock() })
