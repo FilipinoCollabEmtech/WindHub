@@ -691,6 +691,15 @@ local pendingHits = {} -- {player, hp, pos, t0}: HP drop or fling within window 
 local pendingTraps = {} -- {uid, carrierId, t0}: egg turns Dropped = trapped
 local lastHitText = "idle"
 local trapState = "idle"
+local lastTrapNote = ""
+local function trapNote(state, detail)
+    local key = state .. "|" .. tostring(detail or "")
+    if key == lastTrapNote then return end
+    lastTrapNote = key
+    pcall(function()
+        WindUI:Notify({ Title = "Trap: " .. state, Content = tostring(detail or ""), Duration = 3 })
+    end)
+end
 task.spawn(function()
     while task.wait(0.25) do
         local ok, err = pcall(function()
@@ -848,9 +857,11 @@ task.spawn(function()
                 local trapTool, equipped = FindTool("^Trap")
                 if not trapTool then
                     trapState = "no Trap tool"
+                    trapNote("no tool", "Trap [X1] not in backpack/character")
                 elseif not equipped then
                     humanoid:EquipTool(trapTool) -- must replicate equipped first; place next tick
                     trapState = "equipping trap..."
+                    trapNote("equipping", trapTool.Name)
                 else
                     -- carriers first, then players caught stealing (near a Slot egg)
                     local victim, victimKind, eggUid, aimPos = nil, nil, nil, nil
@@ -884,7 +895,9 @@ task.spawn(function()
                     end
                     if not victim then
                         trapState = "no carrier/stealer in " .. TRAP_RANGE
+                        trapNote("searching", "no victim in " .. TRAP_RANGE)
                     else
+                        trapNote("victim " .. victim.Name, victimKind .. " " .. string.format("%.0f", (aimPos - root.Position).Magnitude) .. "m")
                         local toolTrig = NetRemote("RE/ToolTrigger/Trigger")
                         local askPlace = NetRemote("RE/TrapPlacement/AskPlace")
                         if toolTrig and askPlace then
@@ -905,9 +918,11 @@ task.spawn(function()
                             table.insert(pendingTraps, { mode = (victimKind == "carrier") and "egg" or "freeze", uid = eggUid, player = victim, pname = victim.Name, t0 = os.clock() })
                             if #pendingTraps > 5 then table.remove(pendingTraps, 1) end
                             trapState = "trap placed for " .. victim.Name .. " (" .. victimKind .. "), watching..."
+                            trapNote("placed", victim.Name .. " @ " .. string.format("(%.0f,%.0f,%.0f)", ground.X, ground.Y, ground.Z))
                             CombatNotify("Trap placed", victim.Name .. " (" .. victimKind .. ")")
                         else
                             trapState = "no trap remotes"
+                            trapNote("no remotes", "ToolTrigger/TrapPlacement missing")
                         end
                     end
                 end
